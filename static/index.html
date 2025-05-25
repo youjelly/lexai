@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LexAI - Voice AI Assistant</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <h1><i class="fas fa-microphone-alt"></i> LexAI</h1>
+                <p>Real-time Multimodal Voice AI Assistant</p>
+                <div class="connection-status" id="connectionStatus">
+                    <span class="status-indicator" id="statusIndicator"></span>
+                    <span id="statusText">Disconnected</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="app-main">
+            <!-- Control Panel -->
+            <div class="control-panel">
+                <div class="controls-grid">
+                    <!-- Session Controls -->
+                    <div class="control-group">
+                        <h3><i class="fas fa-play-circle"></i> Session</h3>
+                        <div class="control-row">
+                            <button id="newSessionBtn" class="btn btn-primary">
+                                <i class="fas fa-plus"></i> New Session
+                            </button>
+                            <button id="clearConversationBtn" class="btn btn-secondary">
+                                <i class="fas fa-eraser"></i> Clear
+                            </button>
+                        </div>
+                        <div class="session-info">
+                            <span>Session ID: </span>
+                            <span id="sessionId">None</span>
+                        </div>
+                    </div>
+
+                    <!-- Voice Settings -->
+                    <div class="control-group">
+                        <h3><i class="fas fa-volume-up"></i> Voice Settings</h3>
+                        <div class="control-row">
+                            <select id="voiceSelect" class="form-select">
+                                <option value="default">Default Voice</option>
+                            </select>
+                            <select id="languageSelect" class="form-select">
+                                <option value="en">English</option>
+                                <option value="es">Spanish</option>
+                                <option value="fr">French</option>
+                                <option value="de">German</option>
+                                <option value="it">Italian</option>
+                                <option value="pt">Portuguese</option>
+                                <option value="ru">Russian</option>
+                                <option value="zh">Chinese</option>
+                                <option value="ja">Japanese</option>
+                                <option value="ko">Korean</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Recording Controls -->
+                    <div class="control-group">
+                        <h3><i class="fas fa-microphone"></i> Recording</h3>
+                        <div class="recording-controls">
+                            <button id="recordBtn" class="btn btn-record">
+                                <i class="fas fa-microphone"></i>
+                                <span>Start Recording</span>
+                            </button>
+                            <div class="audio-visualizer" id="audioVisualizer">
+                                <div class="visualizer-bars">
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="recording-status" id="recordingStatus">Ready to record</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Conversation Area -->
+            <div class="conversation-container">
+                <div class="conversation-header">
+                    <h2><i class="fas fa-comments"></i> Conversation</h2>
+                    <div class="conversation-controls">
+                        <button id="exportConversationBtn" class="btn btn-outline">
+                            <i class="fas fa-download"></i> Export
+                        </button>
+                    </div>
+                </div>
+                <div class="conversation-messages" id="conversationMessages">
+                    <div class="welcome-message">
+                        <div class="message assistant">
+                            <div class="message-avatar">
+                                <i class="fas fa-robot"></i>
+                            </div>
+                            <div class="message-content">
+                                <div class="message-bubble">
+                                    <p>Welcome to LexAI! I'm your multimodal voice AI assistant. Click "Start Recording" to begin our conversation.</p>
+                                </div>
+                                <div class="message-meta">
+                                    <span class="timestamp">Now</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="conversation-input">
+                    <div class="typing-indicator" id="typingIndicator" style="display: none;">
+                        <div class="typing-dots">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                        <span>AI is thinking...</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Voice Management Modal -->
+        <div class="modal" id="voiceModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-user-friends"></i> Voice Management</h3>
+                    <button class="modal-close" id="voiceModalClose">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="voice-upload">
+                        <h4>Clone New Voice</h4>
+                        <div class="upload-area" id="voiceUploadArea">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                            <p>Drop audio files here or click to upload</p>
+                            <input type="file" id="voiceFileInput" accept="audio/*" multiple>
+                        </div>
+                        <div class="voice-form">
+                            <input type="text" id="voiceName" placeholder="Voice name" class="form-input">
+                            <button id="cloneVoiceBtn" class="btn btn-primary">
+                                <i class="fas fa-magic"></i> Clone Voice
+                            </button>
+                        </div>
+                        <div class="upload-progress" id="uploadProgress" style="display: none;">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progressFill"></div>
+                            </div>
+                            <span id="progressText">0%</span>
+                        </div>
+                    </div>
+                    <div class="voice-library">
+                        <h4>Voice Library</h4>
+                        <div class="voice-list" id="voiceList">
+                            <!-- Voice items will be populated here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audio Player -->
+        <audio id="audioPlayer" preload="auto"></audio>
+
+        <!-- Settings Panel -->
+        <div class="settings-panel" id="settingsPanel">
+            <div class="settings-toggle" id="settingsToggle">
+                <i class="fas fa-cog"></i>
+            </div>
+            <div class="settings-content" id="settingsContent">
+                <h3>Settings</h3>
+                <div class="setting-group">
+                    <label>Audio Quality</label>
+                    <select id="audioQualitySelect" class="form-select">
+                        <option value="high">High (48kHz)</option>
+                        <option value="medium" selected>Medium (16kHz)</option>
+                        <option value="low">Low (8kHz)</option>
+                    </select>
+                </div>
+                <div class="setting-group">
+                    <label>Auto-play Responses</label>
+                    <label class="switch">
+                        <input type="checkbox" id="autoPlayToggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-group">
+                    <label>Show Timestamps</label>
+                    <label class="switch">
+                        <input type="checkbox" id="timestampsToggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-group">
+                    <button id="voiceManagementBtn" class="btn btn-outline">
+                        <i class="fas fa-user-friends"></i> Manage Voices
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="loading-spinner">
+                <div class="spinner"></div>
+                <p id="loadingText">Connecting...</p>
+            </div>
+        </div>
+
+        <!-- Notification Container -->
+        <div class="notification-container" id="notificationContainer">
+            <!-- Notifications will be added here -->
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/audio-handler.js"></script>
+    <script src="/static/js/voice-manager.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
