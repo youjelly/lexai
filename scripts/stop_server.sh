@@ -101,13 +101,19 @@ cleanup_temp() {
 stop_dev_server() {
     log "Stopping development server..."
     
-    # Find uvicorn or python main.py processes
-    PIDS=$(pgrep -f "uvicorn main:app|python main.py" || true)
+    # Find LexAI processes - check multiple patterns
+    PIDS=$(pgrep -f "uvicorn main:app|python.*main\.py|lexai_new/main\.py|lexai_new/venv/bin/python.*main\.py" || true)
     
     if [ -z "$PIDS" ]; then
         warning "No development server processes found"
         return
     fi
+    
+    # Show what we're stopping
+    for pid in $PIDS; do
+        PROC_INFO=$(ps -p "$pid" -o comm,args --no-headers 2>/dev/null || echo "Process $pid")
+        log "Found process: $PROC_INFO"
+    done
     
     # Send SIGTERM to processes
     for pid in $PIDS; do
@@ -116,10 +122,10 @@ stop_dev_server() {
     done
     
     # Wait for processes to stop
-    sleep 2
+    sleep 3
     
     # Check if any processes remain
-    REMAINING=$(pgrep -f "uvicorn main:app|python main.py" || true)
+    REMAINING=$(pgrep -f "uvicorn main:app|python.*main\.py|lexai_new/main\.py|lexai_new/venv/bin/python.*main\.py" || true)
     if [ -n "$REMAINING" ]; then
         warning "Some processes did not stop gracefully, forcing..."
         for pid in $REMAINING; do
