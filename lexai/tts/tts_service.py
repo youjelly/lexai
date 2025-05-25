@@ -76,6 +76,16 @@ class TTSService:
             logger.warning("Model registry not found. Run download_models.py first.")
             return {"models": {}}
     
+    def _is_known_model(self, model_name: str) -> bool:
+        """Check if model is a known Coqui TTS model"""
+        known_patterns = [
+            "tts_models/en/vctk/vits",
+            "tts_models/en/jenny/jenny",
+            "tts_models/multilingual/",
+            "tts_models/"
+        ]
+        return any(model_name.startswith(pattern) for pattern in known_patterns)
+    
     async def initialize(self, model_name: Optional[str] = None):
         """Initialize TTS service with a specific model"""
         model_name = model_name or self.default_model
@@ -88,11 +98,11 @@ class TTSService:
         if model_name in self.loaded_models:
             return self.loaded_models[model_name]
         
-        # Check if model is in registry
-        if model_name not in self.model_registry.get("models", {}):
+        # Check if model is in registry - skip check for known models
+        if model_name not in self.model_registry.get("models", {}) and not self._is_known_model(model_name):
             raise ValueError(f"Model {model_name} not found in registry. Available models: {list(self.model_registry.get('models', {}).keys())}")
         
-        logger.info(f"Loading TTS model: {model_name}")
+        logger.debug(f"Loading TTS model: {model_name}")
         
         # Load model in thread pool
         model = await asyncio.get_event_loop().run_in_executor(
@@ -109,6 +119,17 @@ class TTSService:
             # Double-check after acquiring lock
             if model_name in self.loaded_models:
                 return self.loaded_models[model_name]
+            
+            # Unload other models to free memory (only keep one TTS model)
+            if len(self.loaded_models) > 0:
+                for loaded_model_name in list(self.loaded_models.keys()):
+                    if loaded_model_name != model_name:
+                        logger.info(f"Unloading model {loaded_model_name} to free memory")
+                        del self.loaded_models[loaded_model_name]
+                        # Force garbage collection
+                        torch.cuda.empty_cache()
+                        import gc
+                        gc.collect()
             
             # Set TTS home directory
             os.environ['TTS_HOME'] = str(self.models_path)
@@ -185,25 +206,61 @@ class TTSService:
                     split_sentences=True
                 )
             elif hasattr(tts, 'tts_to_file'):
-                # Standard synthesis
-                synthesis_params = {
-                    "text": text,
-                    "file_path": temp_path
-                }
+                # Check if this is XTTS v2 without voice cloning
+                is_xtts_v2 = config.model_name == "tts_models/multilingual/multi-dataset/xtts_v2"
                 
-                # Add language if multilingual
-                if self._is_multilingual(config.model_name):
-                    synthesis_params["language"] = config.language
-                
-                # Add speaker if multi-speaker
-                if config.speaker and self._is_multispeaker(tts):
-                    synthesis_params["speaker"] = config.speaker
-                
-                # Add speed if supported
-                if hasattr(tts, 'synthesizer') and hasattr(tts.synthesizer, 'tts'):
-                    synthesis_params["speed"] = config.speed
-                
-                tts.tts_to_file(**synthesis_params)
+                if is_xtts_v2 and not config.speaker_wav:
+                    # XTTS v2 requires voice samples, can't work without them
+                    # Fall back to a different model for default voice
+                    logger.warning("XTTS v2 requires voice samples, falling back to VITS for English")
+                    
+                    # For English, use VITS instead
+                    if config.language == "en":
+                        # Load VITS model synchronously
+                        vits_model_name = "tts_models/en/vctk/vits"
+                        if vits_model_name not in self.loaded_models:
+                            self._load_model_sync(vits_model_name)
+                        vits_tts = self.loaded_models[vits_model_name]
+                        
+                        # Use VITS with a default speaker
+                        vits_tts.tts_to_file(
+                            text=text,
+                            file_path=temp_path,
+                            speaker="p225",  # Default VCTK speaker
+                            split_sentences=True
+                        )
+                    else:
+                        # For non-English, we need voice samples for XTTS v2
+                        raise ValueError(f"XTTS v2 requires voice samples for synthesis in {config.language}")
+                elif is_xtts_v2 and config.speaker_wav:
+                    # Use XTTS v2 with provided voice sample
+                    tts.tts_to_file(
+                        text=text,
+                        speaker_wav=config.speaker_wav,
+                        language=config.language,
+                        file_path=temp_path,
+                        split_sentences=True
+                    )
+                else:
+                    # Standard synthesis for other models
+                    synthesis_params = {
+                        "text": text,
+                        "file_path": temp_path
+                    }
+                    
+                    # Add language if multilingual
+                    if self._is_multilingual(config.model_name):
+                        synthesis_params["language"] = config.language
+                    
+                    # Add speaker if multi-speaker
+                    if config.speaker and self._is_multispeaker(tts):
+                        synthesis_params["speaker"] = config.speaker
+                    
+                    # Add speed if supported
+                    if hasattr(tts, 'synthesizer') and hasattr(tts.synthesizer, 'tts'):
+                        synthesis_params["speed"] = config.speed
+                    
+                    tts.tts_to_file(**synthesis_params)
             else:
                 raise ValueError(f"Model {config.model_name} does not support synthesis")
             

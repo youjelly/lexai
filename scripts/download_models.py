@@ -16,14 +16,24 @@ import logging
 import json
 from datetime import datetime
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not required if env vars are already set
+
 try:
     from huggingface_hub import snapshot_download, hf_hub_download
     from transformers import AutoModel, AutoProcessor
     from TTS.utils.manage import ModelManager
-    from TTS.utils.download import download_model_files
-except ImportError:
-    print("Error: Required packages not installed. Please run:")
-    print("pip install huggingface-hub transformers TTS")
+    # Note: download_model_files might not exist in all TTS versions
+except ImportError as e:
+    print(f"Error importing required packages: {e}")
+    print("Please ensure you have activated the virtual environment:")
+    print("  source venv/bin/activate")
+    print("And installed requirements:")
+    print("  pip install huggingface-hub transformers TTS")
     sys.exit(1)
 
 # Model configurations
@@ -175,7 +185,8 @@ def download_ultravox_model(token: Optional[str] = None) -> bool:
         processor = AutoProcessor.from_pretrained(
             model_info['path'],
             cache_dir=model_info['cache_dir'],
-            local_files_only=True
+            local_files_only=True,
+            trust_remote_code=True  # Required for Ultravox custom code
         )
         
         logger.info("Model validation successful")

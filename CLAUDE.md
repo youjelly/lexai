@@ -373,3 +373,59 @@ tail -f /var/log/mongodb/mongod.log
 ✅ **Documentation Complete**
 
 The LexAI system is fully deployed and accessible at **http://3.129.5.177:8000** for real-time voice AI conversations with external browser access.
+
+## 📝 Recent Updates (Session 5/25/2025)
+
+### **Major Improvements:**
+
+1. **Text Input Testing Interface**
+   - Added text input field with Send button for testing LLM + TTS pipeline
+   - Implemented full text → Ultravox LLM → TTS pipeline
+   - Added TTS toggle checkbox for enabling/disabling speech synthesis
+   - Fixed message routing between connection_manager and audio_streamer
+
+2. **TTS Model Compatibility**
+   - Fixed XTTS v2 speaker issue (requires voice samples for synthesis)
+   - Added fallback to VITS model for English when no voice sample available
+   - Implemented automatic model switching based on requirements
+   - Only one TTS model kept in memory at a time to save GPU RAM
+
+3. **Performance Optimizations**
+   - Added 8-bit quantization support for Ultravox (reduces from ~11GB to ~5GB)
+   - Implemented singleton pattern for model services (prevents duplicate loading)
+   - Added PyTorch expandable segments for better memory management
+   - Reduced WebSocket/console logging for faster streaming
+   - Larger audio chunks (200ms) for more efficient streaming
+
+4. **Streaming Audio Playback**
+   - Implemented Web Audio API for real-time audio streaming
+   - Audio plays as chunks arrive instead of waiting for complete synthesis
+   - Fixed PCM16 to Float32 conversion with proper little-endian byte order
+   - Added audio queue management for smooth playback
+
+### **Known Issues & TODOs:**
+
+1. **Audio Quality**
+   - Poor transcription quality from speech input (getting random characters)
+   - Need to investigate audio capture/encoding from browser
+
+2. **Memory Management**
+   - Still tight on GPU memory with both models loaded
+   - Consider using CPU for TTS or further quantization
+
+3. **Voice Features**
+   - XTTS v2 requires voice samples - need to implement default voice handling
+   - Voice cloning interface needs testing
+
+### **Configuration Updates:**
+- Added `bitsandbytes>=0.41.0` to requirements for quantization
+- Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` for better memory
+- Reduced WebSocket chunk delays for faster streaming
+- Disabled verbose logging from uvicorn WebSocket implementation
+
+### **Next Steps:**
+1. Fix audio capture quality for speech input
+2. Implement better default voice handling for XTTS v2
+3. Add voice selection UI integration
+4. Test and optimize memory usage further
+5. Add error recovery for GPU OOM situations

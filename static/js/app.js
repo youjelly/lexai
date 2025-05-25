@@ -12,6 +12,14 @@ class LexAIApp {
         this.audioHandler = null;
         this.voiceManager = null;
         this.conversation = [];
+        this.audioChunks = [];  // For accumulating audio response chunks
+        this.currentAudioMetadata = null;
+        
+        // Streaming audio playback
+        this.audioContext = null;
+        this.audioQueue = [];
+        this.isPlaying = false;
+        this.nextStartTime = 0;
         
         // Configuration
         this.config = {
@@ -69,7 +77,7 @@ class LexAIApp {
             'voiceManagementBtn', 'settingsPanel', 'settingsToggle',
             'settingsContent', 'autoPlayToggle', 'timestampsToggle',
             'audioQualitySelect', 'loadingOverlay', 'loadingText',
-            'notificationContainer', 'audioPlayer'
+            'notificationContainer', 'audioPlayer', 'textInput', 'sendTextBtn', 'enableTTSToggle'
         ];
         
         elementIds.forEach(id => {
@@ -96,6 +104,14 @@ class LexAIApp {
         
         // Export conversation
         this.elements.exportConversationBtn.addEventListener('click', () => this.exportConversation());
+        
+        // Text input
+        this.elements.sendTextBtn.addEventListener('click', () => this.sendTextMessage());
+        this.elements.textInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.sendTextMessage();
+            }
+        });
         
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => this.handleKeyboardShortcuts(e));
@@ -146,7 +162,7 @@ class LexAIApp {
         this.showLoading('Connecting to LexAI...');
         
         try {
-            const wsUrl = `${this.config.wsProtocol}//${this.config.host}:${this.config.port}/ws/audio/${this.sessionId || 'new'}`;
+            const wsUrl = `${this.config.wsProtocol}//${this.config.host}:${this.config.port}/api/ws/audio/${this.sessionId || 'new'}`;
             console.log('Connecting to:', wsUrl);
             
             this.websocket = new WebSocket(wsUrl);
@@ -204,10 +220,28 @@ class LexAIApp {
     }
     
     async handleServerMessage(message) {
-        console.log('Received message:', message);
+        // Only log non-audio messages to reduce console spam
+        if (message.type !== 'audio_response' && message.type !== 'pong') {
+            console.log('Received message:', message);
+        }
         
         switch (message.type) {
+            case 'welcome':
+                // Handle welcome message from server
+                console.log('Connected to server:', message.connection_id);
+                // Start a session
+                this.websocket.send(JSON.stringify({
+                    type: 'start_session',
+                    session_type: 'audio',
+                    config: {
+                        language: 'en',
+                        voice_id: this.selectedVoice
+                    }
+                }));
+                break;
+                
             case 'session_created':
+            case 'session_started':
                 this.sessionId = message.session_id;
                 this.elements.sessionId.textContent = this.sessionId;
                 break;
@@ -219,12 +253,32 @@ class LexAIApp {
                 });
                 break;
                 
+            case 'transcript':
+                // Handle both user transcripts and AI responses
+                this.hideTypingIndicator();
+                this.addMessage('assistant', message.text, {
+                    processingTime: message.processing_time_ms
+                });
+                break;
+                
             case 'response':
                 this.hideTypingIndicator();
                 this.addMessage('assistant', message.text, {
                     model: message.model,
                     processingTime: message.processing_time_ms
                 });
+                break;
+                
+            case 'audio_response':
+                // Handle audio response metadata
+                this.currentAudioMetadata = message;
+                // Reset audio state for new response
+                if (message.chunk_index === 0) {
+                    this.audioQueue = [];
+                    this.nextStartTime = 0;
+                    this.isPlaying = false;
+                }
+                // Audio chunks will come as binary data
                 break;
                 
             case 'error':
@@ -245,23 +299,155 @@ class LexAIApp {
         }
     }
     
-    async handleAudioResponse(audioBlob) {
-        if (this.elements.autoPlayToggle.checked) {
-            try {
-                const audioUrl = URL.createObjectURL(audioBlob);
-                this.elements.audioPlayer.src = audioUrl;
-                await this.elements.audioPlayer.play();
+    async handleAudioResponse(audioData) {
+        // Handle binary audio data from WebSocket
+        if (audioData instanceof Blob && this.elements.autoPlayToggle.checked) {
+            // Initialize audio context if needed
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            // Convert blob to array buffer
+            const arrayBuffer = await audioData.arrayBuffer();
+            const pcmData = new Uint8Array(arrayBuffer);
+            
+            // Convert PCM16 to Float32 for Web Audio API (little-endian)
+            const float32Array = new Float32Array(pcmData.length / 2);
+            for (let i = 0; i < pcmData.length; i += 2) {
+                // Little-endian: low byte first, high byte second
+                const int16 = pcmData[i] | (pcmData[i + 1] << 8);
+                // Handle signed conversion
+                const sample = int16 >= 0x8000 ? int16 - 0x10000 : int16;
+                float32Array[i / 2] = sample / 32768.0;
+            }
+            
+            // Create audio buffer
+            const sampleRate = this.currentAudioMetadata?.sample_rate || 22050;
+            const audioBuffer = this.audioContext.createBuffer(1, float32Array.length, sampleRate);
+            audioBuffer.getChannelData(0).set(float32Array);
+            
+            // Add to queue and play
+            this.audioQueue.push(audioBuffer);
+            if (!this.isPlaying) {
+                this.playNextChunk();
+            }
+            
+            // Check if this is the last chunk
+            if (this.currentAudioMetadata) {
+                const currentChunk = this.currentAudioMetadata.chunk_index + 1;
+                const totalChunks = this.currentAudioMetadata.total_chunks;
                 
-                // Clean up object URL after playing
-                this.elements.audioPlayer.addEventListener('ended', () => {
-                    URL.revokeObjectURL(audioUrl);
-                }, { once: true });
-                
-            } catch (error) {
-                console.error('Error playing audio response:', error);
-                this.showNotification('Failed to play audio response', 'error');
+                if (currentChunk === totalChunks) {
+                    console.log('Audio streaming complete');
+                }
             }
         }
+    }
+    
+    playNextChunk() {
+        if (this.audioQueue.length === 0) {
+            this.isPlaying = false;
+            return;
+        }
+        
+        this.isPlaying = true;
+        const audioBuffer = this.audioQueue.shift();
+        
+        // Create buffer source
+        const source = this.audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.audioContext.destination);
+        
+        // Calculate when to start this chunk
+        const currentTime = this.audioContext.currentTime;
+        const startTime = Math.max(currentTime, this.nextStartTime);
+        
+        // Update next start time
+        this.nextStartTime = startTime + audioBuffer.duration;
+        
+        // Play the chunk
+        source.start(startTime);
+        
+        // Schedule next chunk
+        source.onended = () => {
+            this.playNextChunk();
+        };
+    }
+    
+    async playAccumulatedAudio() {
+        if (!this.elements.autoPlayToggle.checked || this.audioChunks.length === 0) {
+            this.audioChunks = [];
+            return;
+        }
+        
+        try {
+            // Combine all chunks
+            const totalLength = this.audioChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+            const combinedAudio = new Uint8Array(totalLength);
+            let offset = 0;
+            
+            for (const chunk of this.audioChunks) {
+                combinedAudio.set(chunk, offset);
+                offset += chunk.length;
+            }
+            
+            // Create WAV file from PCM data
+            const sampleRate = this.currentAudioMetadata?.sample_rate || 22050;
+            const wavBlob = this.createWavFromPcm(combinedAudio, sampleRate);
+            
+            // Play the audio
+            const audioUrl = URL.createObjectURL(wavBlob);
+            this.elements.audioPlayer.src = audioUrl;
+            console.log('Playing audio response');
+            await this.elements.audioPlayer.play();
+            
+            // Clean up
+            this.elements.audioPlayer.addEventListener('ended', () => {
+                URL.revokeObjectURL(audioUrl);
+            }, { once: true });
+            
+            // Clear chunks for next response
+            this.audioChunks = [];
+            this.currentAudioMetadata = null;
+            
+        } catch (error) {
+            console.error('Error playing audio response:', error);
+            this.showNotification('Failed to play audio response', 'error');
+            this.audioChunks = [];
+            this.currentAudioMetadata = null;
+        }
+    }
+    
+    createWavFromPcm(pcmData, sampleRate) {
+        // Create WAV header
+        const wavHeader = new ArrayBuffer(44);
+        const view = new DataView(wavHeader);
+        
+        // "RIFF" chunk descriptor
+        view.setUint32(0, 0x52494646, false); // "RIFF"
+        view.setUint32(4, 36 + pcmData.length, true); // file size - 8
+        view.setUint32(8, 0x57415645, false); // "WAVE"
+        
+        // "fmt " sub-chunk
+        view.setUint32(12, 0x666d7420, false); // "fmt "
+        view.setUint32(16, 16, true); // subchunk size
+        view.setUint16(20, 1, true); // audio format (1 = PCM)
+        view.setUint16(22, 1, true); // number of channels
+        view.setUint32(24, sampleRate, true); // sample rate
+        view.setUint32(28, sampleRate * 2, true); // byte rate (sample rate * channels * bytes per sample)
+        view.setUint16(32, 2, true); // block align (channels * bytes per sample)
+        view.setUint16(34, 16, true); // bits per sample
+        
+        // "data" sub-chunk
+        view.setUint32(36, 0x64617461, false); // "data"
+        view.setUint32(40, pcmData.length, true); // data size
+        
+        // Combine header and PCM data
+        const wavBuffer = new Uint8Array(44 + pcmData.length);
+        wavBuffer.set(new Uint8Array(wavHeader), 0);
+        wavBuffer.set(pcmData, 44);
+        
+        return new Blob([wavBuffer], { type: 'audio/wav' });
     }
     
     scheduleReconnect() {
@@ -386,6 +572,47 @@ class LexAIApp {
         bars.forEach(bar => {
             bar.style.height = '20%';
         });
+    }
+    
+    async sendTextMessage() {
+        const text = this.elements.textInput.value.trim();
+        if (!text) return;
+        
+        if (!this.isConnected) {
+            this.showNotification('Not connected to server', 'error');
+            return;
+        }
+        
+        // Clear input
+        this.elements.textInput.value = '';
+        
+        // Add user message to chat
+        this.addMessage('user', text);
+        
+        // Show typing indicator
+        this.showTypingIndicator();
+        
+        try {
+            // Send text message through WebSocket
+            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                const enableTTS = this.elements.enableTTSToggle.checked;
+                
+                this.websocket.send(JSON.stringify({
+                    type: 'text',
+                    text: text,
+                    session_id: this.sessionId,
+                    enable_tts: enableTTS
+                }));
+                
+                console.log('Sent text message:', text, 'TTS:', enableTTS);
+            } else {
+                throw new Error('WebSocket not connected');
+            }
+        } catch (error) {
+            console.error('Error sending text message:', error);
+            this.showNotification('Failed to send message', 'error');
+            this.hideTypingIndicator();
+        }
     }
     
     addMessage(sender, text, metadata = {}) {

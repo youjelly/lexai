@@ -58,21 +58,21 @@ app = FastAPI(
     description="Real-time multimodal AI voice assistant API",
     version="0.1.0",
     lifespan=lifespan,
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json"
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
 )
 
 # Setup middleware
 setup_middleware(app)
 
 # Include routes
-app.include_router(system.router, prefix="/api", tags=["system"])
-app.include_router(conversation.router, prefix="/api/conversations", tags=["conversations"])
-app.include_router(voice.router, prefix="/api/voices", tags=["voices"])
-app.include_router(audio.router, prefix="/api/audio", tags=["audio"])
-app.include_router(tts.router, prefix="/api/tts", tags=["tts"])
-app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+app.include_router(system.router, tags=["system"])
+app.include_router(conversation.router, prefix="/conversations", tags=["conversations"])
+app.include_router(voice.router, prefix="/voices", tags=["voices"])
+app.include_router(audio.router, prefix="/audio", tags=["audio"])
+app.include_router(tts.router, prefix="/tts", tags=["tts"])
+app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 
 # WebSocket route (special handling)
 app.include_router(conversation.ws_router)

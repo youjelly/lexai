@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     CACHE_BASE_PATH: str = Field(default="/opt/dlami/nvme/cache")
     ULTRAVOX_CACHE_PATH: str = Field(default="/opt/dlami/nvme/cache/ultravox")
     TTS_CACHE_PATH: str = Field(default="/opt/dlami/nvme/cache/tts")
+    HUGGINGFACE_CACHE_PATH: str = Field(default="/opt/dlami/nvme/cache/huggingface")
     MONGODB_TEMP_PATH: str = Field(default="/opt/dlami/nvme/cache/mongodb_temp")
     TEMP_FILES_PATH: str = Field(default="/opt/dlami/nvme/temp")
     
@@ -229,6 +230,9 @@ class Settings(BaseSettings):
         os.environ["CUDA_VISIBLE_DEVICES"] = self.CUDA_VISIBLE_DEVICES
         os.environ["TORCH_CUDA_ARCH_LIST"] = self.TORCH_CUDA_ARCH_LIST
         
+        # Enable expandable segments for better memory management
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        
         # Enable TF32 for better performance on Ada Lovelace
         if torch.cuda.is_available():
             torch.backends.cuda.matmul.allow_tf32 = True
@@ -277,7 +281,7 @@ settings.optimize_for_g6e()
 # Set HuggingFace token if available
 if settings.HF_TOKEN:
     os.environ["HF_TOKEN"] = settings.HF_TOKEN
-    os.environ["HUGGING_FACE_HUB_TOKEN"] = settings.HF_TOKEN
+    os.environ["HUGGINGFACE_HUB_TOKEN"] = settings.HF_TOKEN  # Correct env var name
 
 # Environment-specific configurations
 if settings.ENVIRONMENT == Environment.DEVELOPMENT:

@@ -101,8 +101,8 @@ cleanup_temp() {
 stop_dev_server() {
     log "Stopping development server..."
     
-    # Find uvicorn processes
-    PIDS=$(pgrep -f "uvicorn main:app" || true)
+    # Find uvicorn or python main.py processes
+    PIDS=$(pgrep -f "uvicorn main:app|python main.py" || true)
     
     if [ -z "$PIDS" ]; then
         warning "No development server processes found"
@@ -119,7 +119,7 @@ stop_dev_server() {
     sleep 2
     
     # Check if any processes remain
-    REMAINING=$(pgrep -f "uvicorn main:app" || true)
+    REMAINING=$(pgrep -f "uvicorn main:app|python main.py" || true)
     if [ -n "$REMAINING" ]; then
         warning "Some processes did not stop gracefully, forcing..."
         for pid in $REMAINING; do
@@ -175,17 +175,24 @@ main() {
     if [ "$DEV" = true ]; then
         stop_dev_server
     else
-        # Check if service is running
-        if check_service; then
-            # Save sessions unless forced
-            if [ "$FORCE" = false ]; then
-                save_sessions
-            else
-                warning "Skipping session save (forced stop)"
+        # Check if systemd service exists
+        if systemctl list-unit-files | grep -q "lexai.service"; then
+            # Check if service is running
+            if check_service; then
+                # Save sessions unless forced
+                if [ "$FORCE" = false ]; then
+                    save_sessions
+                else
+                    warning "Skipping session save (forced stop)"
+                fi
+                
+                # Stop service
+                stop_service
             fi
-            
-            # Stop service
-            stop_service
+        else
+            # No systemd service, try to stop dev server
+            warning "Systemd service not found, checking for development server..."
+            stop_dev_server
         fi
     fi
     

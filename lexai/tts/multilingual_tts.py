@@ -218,7 +218,8 @@ class MultilingualTTS:
         else:
             language = self._normalize_language_code(language)
         
-        logger.info(f"Synthesizing in {language}: {text[:50]}...")
+        # Don't log the text content, just the action
+        logger.debug(f"Synthesizing in {language}")
         
         # Handle voice cloning
         if voice_id:
@@ -227,10 +228,17 @@ class MultilingualTTS:
         # Get best model for language
         model_name = self.get_best_model_for_language(language)
         
+        # If we got XTTS v2 but no voice, use VITS for English
+        if model_name == "tts_models/multilingual/multi-dataset/xtts_v2" and language == "en":
+            # XTTS v2 needs voice samples, use VITS instead for default voice
+            model_name = "tts_models/en/vctk/vits"
+            logger.info(f"Using VITS instead of XTTS v2 for default English voice")
+        
         # Create TTS config
         tts_config = TTSConfig(
             model_name=model_name,
             language=language,
+            speaker="p225" if model_name == "tts_models/en/vctk/vits" else None,  # VITS needs speaker ID
             **kwargs
         )
         

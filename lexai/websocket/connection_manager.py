@@ -11,8 +11,8 @@ from typing import Dict, Set, Optional, Any, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import websockets
-from websockets.server import WebSocketServerProtocol
-from websockets.exceptions import ConnectionClosed, InvalidStatusCode
+from fastapi import WebSocket
+from starlette.websockets import WebSocketDisconnect
 
 from .audio_streamer import AudioStreamer, create_audio_streamer
 from .session_manager import session_manager
@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 class ConnectionInfo:
     """Information about a WebSocket connection"""
     connection_id: str
-    websocket: WebSocketServerProtocol
+    websocket: WebSocket
     session_id: Optional[str] = None
     user_id: Optional[str] = None
     connected_at: float = field(default_factory=time.time)
@@ -97,7 +97,7 @@ class ConnectionManager:
     
     async def handle_connection(
         self,
-        websocket: WebSocketServerProtocol,
+        websocket: WebSocket,
         path: str
     ):
         """Handle new WebSocket connection"""
@@ -110,8 +110,8 @@ class ConnectionManager:
             return
         
         # Extract connection metadata
-        headers = websocket.request_headers
-        client_ip = websocket.remote_address[0] if websocket.remote_address else "unknown"
+        headers = websocket.headers if hasattr(websocket, 'headers') else {}
+        client_ip = websocket.client.host if hasattr(websocket, 'client') and websocket.client else "unknown"
         
         # Create connection info
         connection = ConnectionInfo(
@@ -142,11 +142,11 @@ class ConnectionManager:
             # Handle messages
             await self._handle_messages(connection)
             
-        except ConnectionClosed:
+        except WebSocketDisconnect:
             logger.info(f"Connection {connection_id} closed")
         except Exception as e:
             logger.error(f"Connection {connection_id} error: {e}")
-            await websocket.close(1011, "Internal error")
+            await websocket.close(code=1011, reason="Internal error")
         finally:
             await self._cleanup_connection(connection)
     
@@ -157,10 +157,15 @@ class ConnectionManager:
             websocket = connection.websocket
             auth_timeout = 10.0  # 10 seconds to authenticate
             
-            auth_message = await asyncio.wait_for(
-                websocket.recv(),
+            auth_message_data = await asyncio.wait_for(
+                websocket.receive(),
                 timeout=auth_timeout
             )
+            
+            if 'text' in auth_message_data:
+                auth_message = auth_message_data['text']
+            else:
+                return False
             
             data = json.loads(auth_message)
             
@@ -224,28 +229,45 @@ class ConnectionManager:
         """Handle messages from connection"""
         websocket = connection.websocket
         
-        async for message in websocket:
+        while True:
             try:
+                # Receive message from WebSocket
+                message = await websocket.receive()
+                
+                # Handle disconnection
+                if message['type'] == 'websocket.disconnect':
+                    break
+                
+                # Get actual message data
+                if 'bytes' in message:
+                    data = message['bytes']
+                    is_binary = True
+                elif 'text' in message:
+                    data = message['text']
+                    is_binary = False
+                else:
+                    continue
+                
                 connection.update_activity()
                 self.stats["messages_received"] += 1
                 
                 # Handle binary audio data
-                if isinstance(message, bytes):
-                    self.stats["bytes_received"] += len(message)
+                if is_binary:
+                    self.stats["bytes_received"] += len(data)
                     
                     if connection.audio_streamer:
-                        await connection.audio_streamer._handle_audio_data(message)
+                        await connection.audio_streamer._handle_audio_data(data)
                     else:
                         await self._send_error(connection, "No active audio session")
                     continue
                 
                 # Handle JSON messages
-                self.stats["bytes_received"] += len(message.encode())
-                data = json.loads(message)
-                message_type = data.get("type")
+                self.stats["bytes_received"] += len(data.encode())
+                json_data = json.loads(data)
+                message_type = json_data.get("type")
                 
                 if message_type == "start_session":
-                    await self._handle_start_session(connection, data)
+                    await self._handle_start_session(connection, json_data)
                 elif message_type == "end_session":
                     await self._handle_end_session(connection)
                 elif message_type == "ping":
@@ -253,13 +275,25 @@ class ConnectionManager:
                 else:
                     # Forward to audio streamer if active
                     if connection.audio_streamer:
-                        # Recreate message for streamer
-                        await websocket.send(message)
+                        # Check if it's a text message
+                        if message_type == "text":
+                            await connection.audio_streamer._handle_text_message(json_data, websocket)
+                        else:
+                            # Let audio streamer handle other message types
+                            # Create a message dict that mimics WebSocket message format
+                            mock_message = {'text': data}
+                            # Process through audio streamer's message handler logic
+                            if hasattr(connection.audio_streamer, '_process_json_message'):
+                                await connection.audio_streamer._process_json_message(json_data, websocket)
+                            else:
+                                await self._send_error(connection, f"Unknown message type: {message_type}")
                     else:
                         await self._send_error(connection, f"Unknown message type: {message_type}")
                 
             except json.JSONDecodeError:
                 await self._send_error(connection, "Invalid JSON")
+            except WebSocketDisconnect:
+                break
             except Exception as e:
                 logger.error(f"Message handling error: {e}")
                 await self._send_error(connection, str(e))
@@ -293,7 +327,10 @@ class ConnectionManager:
             # Configure from request
             config = data.get("config", {})
             if config:
-                await connection.audio_streamer._handle_init({"config": config}, connection.websocket)
+                # Update audio streamer config directly
+                for key, value in config.items():
+                    if hasattr(connection.audio_streamer.config, key):
+                        setattr(connection.audio_streamer.config, key, value)
             
             # Send session started
             await self._send_message(connection, {
@@ -307,12 +344,19 @@ class ConnectionManager:
                 }
             })
             
-            # Start streaming handler
-            asyncio.create_task(
-                connection.audio_streamer.handle_connection(
-                    connection.websocket,
-                    ""
-                )
+            # Initialize audio streamer with websocket
+            connection.audio_streamer.websocket = connection.websocket
+            connection.audio_streamer.is_streaming = True
+            
+            # Send initial session info from audio streamer
+            await connection.audio_streamer._send_session_info(connection.websocket)
+            
+            # Start processing loops
+            connection.audio_streamer.processing_task = asyncio.create_task(
+                connection.audio_streamer._audio_processing_loop(connection.websocket)
+            )
+            connection.audio_streamer.synthesis_task = asyncio.create_task(
+                connection.audio_streamer._audio_synthesis_loop(connection.websocket)
             )
             
             logger.info(f"Started session {session.session_id} for connection {connection.connection_id}")
@@ -370,7 +414,7 @@ class ConnectionManager:
         """Send message to connection"""
         try:
             message = json.dumps(data)
-            await connection.websocket.send(message)
+            await connection.websocket.send_text(message)
             self.stats["messages_sent"] += 1
             self.stats["bytes_sent"] += len(message.encode())
         except Exception as e:
@@ -503,7 +547,7 @@ class ConnectionManager:
 connection_manager = ConnectionManager()
 
 
-async def websocket_handler(websocket: WebSocketServerProtocol, path: str):
+async def websocket_handler(websocket: WebSocket, path: str):
     """Main WebSocket handler for server"""
     await connection_manager.handle_connection(websocket, path)
 

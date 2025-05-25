@@ -15,6 +15,11 @@ from typing import Optional
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+# Set HuggingFace cache to ephemeral storage early
+os.environ['HF_HOME'] = '/opt/dlami/nvme/cache/huggingface'
+os.environ['TRANSFORMERS_CACHE'] = '/opt/dlami/nvme/cache/huggingface'
+os.environ['HF_DATASETS_CACHE'] = '/opt/dlami/nvme/cache/huggingface'
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -23,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from lexai.api.main import app as api_app
+from fastapi import FastAPI
 from monitoring import setup_logging, get_logger, metrics_collector
 
 # Setup logging
@@ -55,8 +61,15 @@ def setup_signal_handlers():
 def configure_app():
     """Configure the FastAPI application for production"""
     
+    # Create a new app that wraps the API
+    app = FastAPI(
+        title="LexAI",
+        description="Real-time multimodal AI voice assistant",
+        version="0.1.0"
+    )
+    
     # Configure CORS for external access
-    api_app.add_middleware(
+    app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
@@ -66,11 +79,11 @@ def configure_app():
     
     # Apply production settings
     if settings.ENVIRONMENT.value == "production":
-        api_app.debug = False
+        app.debug = False
         
         # Add production middleware
         from fastapi.middleware.trustedhost import TrustedHostMiddleware
-        api_app.add_middleware(
+        app.add_middleware(
             TrustedHostMiddleware,
             allowed_hosts=settings.ALLOWED_HOSTS
         )
@@ -93,7 +106,7 @@ def configure_app():
                     
                     return response
             
-            api_app.add_middleware(SecurityHeadersMiddleware)
+            app.add_middleware(SecurityHeadersMiddleware)
     
     # Mount static files if enabled
     if settings.SERVE_STATIC_FILES:
@@ -103,11 +116,11 @@ def configure_app():
             logger.info(f"Created static files directory: {static_path}")
         
         # Mount static files
-        api_app.mount("/static", StaticFiles(directory=settings.STATIC_FILES_PATH), name="static")
+        app.mount("/static", StaticFiles(directory=settings.STATIC_FILES_PATH), name="static")
         logger.info(f"Mounted static files from {settings.STATIC_FILES_PATH}")
         
         # Serve index.html at root
-        @api_app.get("/")
+        @app.get("/")
         async def serve_index():
             index_file = static_path / "index.html"
             if index_file.exists():
@@ -117,10 +130,14 @@ def configure_app():
         
         logger.info("Configured root route to serve index.html")
     
+    # Mount the API app
+    app.mount("/api", api_app)
+    logger.info("Mounted API at /api")
+    
     # Start metrics collection
     metrics_collector.start()
     
-    return api_app
+    return app
 
 
 def main():
@@ -140,6 +157,28 @@ def main():
     if settings.ENVIRONMENT.value == "production":
         settings.optimize_for_g6e()
         logger.info("Applied g6e instance optimizations")
+    
+    # Preload models for faster first request
+    if settings.ENVIRONMENT.value == "production":
+        logger.info("Preloading AI models...")
+        try:
+            from lexai.models.ultravox_service import UltravoxService
+            from lexai.tts.tts_service import TTSService
+            import asyncio
+            
+            # Initialize Ultravox model
+            ultravox = UltravoxService()
+            asyncio.run(ultravox.initialize())
+            logger.info("Ultravox model preloaded")
+            
+            # Initialize TTS model
+            tts = TTSService()
+            tts.load_model("tts_models/multilingual/multi-dataset/xtts_v2")
+            logger.info("TTS model preloaded")
+            
+        except Exception as e:
+            logger.error(f"Failed to preload models: {e}")
+            # Continue anyway - models will load on demand
     
     # Validate system
     errors = settings.validate_system()
@@ -167,7 +206,7 @@ def main():
         
         # Workers and concurrency
         workers=1,  # Single worker for GPU model
-        limit_concurrency=settings.MAX_WORKERS,
+        limit_concurrency=1000,  # High limit for concurrent connections
         limit_max_requests=10000 if settings.ENVIRONMENT.value == "production" else None,
         
         # Timeouts
@@ -197,6 +236,9 @@ def main():
         metrics_collector.stop()
         logger.info("Server shutdown complete")
 
+
+# Create app instance for uvicorn
+app = configure_app()
 
 if __name__ == "__main__":
     main()

@@ -15,13 +15,13 @@ from enum import Enum
 import struct
 import base64
 
-import websockets
-from websockets.server import WebSocketServerProtocol
-from websockets.exceptions import ConnectionClosed
+from fastapi import WebSocket
+from starlette.websockets import WebSocketDisconnect
 
 from ..models import streaming_inference, StreamConfig
 from ..tts import voice_manager, multilingual_tts
 from ..utils.logging import get_logger
+from ..services import model_services
 from config import settings
 
 logger = get_logger(__name__)
@@ -58,7 +58,7 @@ class StreamingConfig:
     sample_rate: int = 16000
     channels: int = 1
     encoding: str = "pcm16"  # pcm16, pcm32, float32
-    chunk_size_ms: int = 100
+    chunk_size_ms: int = 200  # Larger chunks for more efficient streaming
     
     # Processing settings
     language: Optional[str] = None
@@ -130,7 +130,7 @@ class AudioStreamer:
     
     async def handle_connection(
         self,
-        websocket: WebSocketServerProtocol,
+        websocket: WebSocket,
         path: str
     ):
         """Handle WebSocket connection lifecycle"""
@@ -151,39 +151,59 @@ class AudioStreamer:
         finally:
             await self._cleanup()
     
-    async def _handle_messages(self, websocket: WebSocketServerProtocol):
+    async def _handle_messages(self, websocket: WebSocket):
         """Handle incoming WebSocket messages"""
-        async for message in websocket:
+        while True:
             try:
-                # Parse message
-                if isinstance(message, bytes):
+                # Receive message from WebSocket
+                message = await websocket.receive()
+                
+                # Handle disconnection
+                if message['type'] == 'websocket.disconnect':
+                    break
+                
+                # Get actual message data
+                if 'bytes' in message:
                     # Binary audio data
-                    await self._handle_audio_data(message)
-                else:
+                    await self._handle_audio_data(message['bytes'])
+                elif 'text' in message:
                     # JSON control message
-                    data = json.loads(message)
-                    message_type = MessageType(data.get("type"))
+                    data = json.loads(message['text'])
+                    logger.debug(f"Received JSON message: {data}")
                     
-                    if message_type == MessageType.INIT:
-                        await self._handle_init(data, websocket)
-                    elif message_type == MessageType.START:
-                        await self._handle_start(websocket)
-                    elif message_type == MessageType.STOP:
-                        await self._handle_stop(websocket)
-                    elif message_type == MessageType.PING:
-                        await self._handle_ping(websocket)
-                    elif message_type == MessageType.AUDIO_CONFIG:
-                        await self._handle_audio_config(data)
+                    # Check for text message first (not in enum)
+                    if data.get("type") == "text":
+                        logger.info("Routing to text message handler")
+                        await self._handle_text_message(data, websocket)
                     else:
-                        logger.warning(f"Unknown message type: {message_type}")
+                        # Try to parse as enum
+                        try:
+                            message_type = MessageType(data.get("type"))
+                            
+                            if message_type == MessageType.INIT:
+                                await self._handle_init(data, websocket)
+                            elif message_type == MessageType.START:
+                                await self._handle_start(websocket)
+                            elif message_type == MessageType.STOP:
+                                await self._handle_stop(websocket)
+                            elif message_type == MessageType.PING:
+                                await self._handle_ping(websocket)
+                            elif message_type == MessageType.AUDIO_CONFIG:
+                                await self._handle_audio_config(data)
+                            else:
+                                logger.warning(f"Unknown message type: {message_type}")
+                        except ValueError:
+                            logger.warning(f"Unknown message type: {data.get('type')}")
                 
             except json.JSONDecodeError:
                 await self._send_error(websocket, "Invalid JSON")
+            except WebSocketDisconnect:
+                break
             except Exception as e:
                 logger.error(f"Message handling error: {e}")
                 await self._send_error(websocket, str(e))
     
-    async def _handle_init(self, data: Dict[str, Any], websocket: WebSocketServerProtocol):
+    async def _handle_init(self, data: Dict[str, Any], websocket: WebSocket):
         """Handle initialization message"""
         # Update configuration
         config_data = data.get("config", {})
@@ -215,7 +235,7 @@ class AudioStreamer:
         
         logger.info(f"Session {self.session_id} initialized with config: {asdict(self.config)}")
     
-    async def _handle_start(self, websocket: WebSocketServerProtocol):
+    async def _handle_start(self, websocket: WebSocket):
         """Handle start streaming message"""
         if self.is_streaming:
             await self._send_error(websocket, "Already streaming")
@@ -238,7 +258,7 @@ class AudioStreamer:
         
         logger.info(f"Started streaming for session {self.session_id}")
     
-    async def _handle_stop(self, websocket: WebSocketServerProtocol):
+    async def _handle_stop(self, websocket: WebSocket):
         """Handle stop streaming message"""
         if not self.is_streaming:
             await self._send_error(websocket, "Not streaming")
@@ -263,20 +283,51 @@ class AudioStreamer:
             return
         
         try:
-            # Decode audio based on encoding
-            if self.config.encoding == "pcm16":
-                # Convert bytes to int16 array
-                audio = np.frombuffer(data, dtype=np.int16)
-                # Convert to float32 normalized
-                audio = audio.astype(np.float32) / 32768.0
-            elif self.config.encoding == "pcm32":
-                audio = np.frombuffer(data, dtype=np.int32)
-                audio = audio.astype(np.float32) / 2147483648.0
-            elif self.config.encoding == "float32":
-                audio = np.frombuffer(data, dtype=np.float32)
-            else:
-                logger.error(f"Unsupported encoding: {self.config.encoding}")
-                return
+            # Log data info for debugging
+            logger.debug(f"Received audio data: {len(data)} bytes")
+            
+            # Try to decode as WebM/Opus first (what browsers send)
+            try:
+                # Use soundfile to decode the audio
+                import soundfile as sf
+                import io
+                
+                # Create a file-like object from bytes
+                audio_io = io.BytesIO(data)
+                
+                # Read audio data
+                audio, sample_rate = sf.read(audio_io, dtype='float32')
+                
+                # Resample if needed (Ultravox expects 16kHz)
+                if sample_rate != 16000:
+                    import librosa
+                    audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
+                
+                logger.debug(f"Decoded audio: {len(audio)} samples at {sample_rate}Hz")
+                
+            except Exception as decode_error:
+                # Fall back to raw PCM decoding
+                logger.debug(f"WebM decode failed, trying PCM: {decode_error}")
+                
+                # Decode audio based on encoding
+                if self.config.encoding == "pcm16":
+                    # Check if data length is valid for int16
+                    if len(data) % 2 != 0:
+                        logger.warning(f"Audio data length {len(data)} not aligned for int16, padding")
+                        data = data + b'\x00'  # Pad with zero byte
+                    
+                    # Convert bytes to int16 array
+                    audio = np.frombuffer(data, dtype=np.int16)
+                    # Convert to float32 normalized
+                    audio = audio.astype(np.float32) / 32768.0
+                elif self.config.encoding == "pcm32":
+                    audio = np.frombuffer(data, dtype=np.int32)
+                    audio = audio.astype(np.float32) / 2147483648.0
+                elif self.config.encoding == "float32":
+                    audio = np.frombuffer(data, dtype=np.float32)
+                else:
+                    logger.error(f"Unsupported encoding: {self.config.encoding}")
+                    return
             
             # Handle multi-channel
             if self.config.channels > 1:
@@ -306,14 +357,69 @@ class AudioStreamer:
         
         logger.info(f"Updated audio config for session {self.session_id}")
     
-    async def _handle_ping(self, websocket: WebSocketServerProtocol):
+    async def _handle_ping(self, websocket: WebSocket):
         """Handle ping message"""
         await self._send_message(websocket, {
             "type": MessageType.PONG.value,
             "timestamp": time.time()
         })
     
-    async def _audio_processing_loop(self, websocket: WebSocketServerProtocol):
+    async def _handle_text_message(self, data: Dict[str, Any], websocket: WebSocket):
+        """Handle text message for LLM processing"""
+        text = data.get("text", "").strip()
+        if not text:
+            await self._send_error(websocket, "Empty text message")
+            return
+        
+        # Check if TTS is requested (default to True for backward compatibility)
+        enable_tts = data.get("enable_tts", True)
+        
+        logger.info(f"Received text message: {text[:50]}... (TTS: {enable_tts})")
+        
+        try:
+            # Get Ultravox service singleton
+            ultravox_service = await model_services.get_ultravox()
+            
+            # Process text through Ultravox LLM
+            logger.info("Processing text through Ultravox LLM...")
+            response_text = ""
+            
+            # Use Ultravox to generate a response
+            async for chunk in ultravox_service.process_text(text):
+                response_text += chunk
+            
+            logger.info(f"LLM response: {response_text[:100]}...")
+            
+            # Send the LLM response back to client
+            await self._send_message(websocket, {
+                "type": MessageType.TRANSCRIPT.value,
+                "text": response_text,
+                "timestamp": time.time()
+            })
+            
+            # Synthesize speech if TTS is enabled
+            if enable_tts and self.config.bidirectional:
+                logger.info(f"Synthesizing TTS for response: {response_text[:50]}...")
+                
+                # Ensure synthesis loop is running
+                if not self.is_streaming:
+                    logger.info("Starting audio synthesis for text response...")
+                    self.is_streaming = True
+                    if not self.synthesis_task or self.synthesis_task.done():
+                        self.synthesis_task = asyncio.create_task(
+                            self._audio_synthesis_loop(websocket)
+                        )
+                
+                # Add text to synthesis queue
+                await self.output_buffer.put(response_text)
+            else:
+                logger.info("TTS disabled for this message")
+                
+        except Exception as e:
+            logger.error(f"Error processing text message: {e}")
+            await self._send_error(websocket, str(e))
+    
+    async def _audio_processing_loop(self, websocket: WebSocket):
         """Process incoming audio stream"""
         try:
             # Create audio stream from queue
@@ -350,7 +456,7 @@ class AudioStreamer:
             logger.error(f"Audio processing error: {e}")
             await self._send_error(websocket, str(e))
     
-    async def _audio_synthesis_loop(self, websocket: WebSocketServerProtocol):
+    async def _audio_synthesis_loop(self, websocket: WebSocket):
         """Synthesize and stream audio responses"""
         try:
             while self.is_streaming:
@@ -363,6 +469,7 @@ class AudioStreamer:
                     
                     # Synthesize audio
                     start_time = time.time()
+                    logger.info(f"Generating speech...")
                     
                     audio = await multilingual_tts.synthesize(
                         text,
@@ -372,6 +479,7 @@ class AudioStreamer:
                     
                     synthesis_time = (time.time() - start_time) * 1000
                     self.stats["processing_time_ms"] += synthesis_time
+                    logger.info(f"Speech generation done ({synthesis_time:.1f}ms)")
                     
                     # Stream audio chunks
                     await self._stream_audio_response(websocket, audio)
@@ -396,7 +504,7 @@ class AudioStreamer:
         # Add to synthesis queue
         await self.output_buffer.put(response)
     
-    async def _stream_audio_response(self, websocket: WebSocketServerProtocol, audio: np.ndarray):
+    async def _stream_audio_response(self, websocket: WebSocket, audio: np.ndarray):
         """Stream audio response in chunks"""
         # Convert to appropriate format
         if self.config.encoding == "pcm16":
@@ -416,7 +524,7 @@ class AudioStreamer:
             chunk = audio_bytes[i:i + chunk_bytes]
             
             # Send as binary message
-            await websocket.send(chunk)
+            await websocket.send_bytes(chunk)
             
             # Also send metadata
             await self._send_message(websocket, {
@@ -429,10 +537,10 @@ class AudioStreamer:
             
             self.stats["chunks_sent"] += 1
             
-            # Small delay to simulate real-time
-            await asyncio.sleep(self.config.chunk_size_ms / 1000)
+            # Reduced delay for faster streaming
+            await asyncio.sleep(self.config.chunk_size_ms / 2000)  # Half the delay
     
-    async def _send_transcript(self, websocket: WebSocketServerProtocol, result: Dict[str, Any]):
+    async def _send_transcript(self, websocket: WebSocket, result: Dict[str, Any]):
         """Send transcript result"""
         await self._send_message(websocket, {
             "type": MessageType.TRANSCRIPT.value,
@@ -445,7 +553,7 @@ class AudioStreamer:
         
         self.stats["transcripts"] += 1
     
-    async def _send_status(self, websocket: WebSocketServerProtocol, status: str):
+    async def _send_status(self, websocket: WebSocket, status: str):
         """Send processing status"""
         await self._send_message(websocket, {
             "type": MessageType.PROCESSING_STATUS.value,
@@ -453,7 +561,7 @@ class AudioStreamer:
             "stats": self.stats
         })
     
-    async def _send_error(self, websocket: WebSocketServerProtocol, error: str):
+    async def _send_error(self, websocket: WebSocket, error: str):
         """Send error message"""
         await self._send_message(websocket, {
             "type": MessageType.ERROR.value,
@@ -463,7 +571,7 @@ class AudioStreamer:
         
         self.stats["errors"] += 1
     
-    async def _send_session_info(self, websocket: WebSocketServerProtocol):
+    async def _send_session_info(self, websocket: WebSocket):
         """Send session information"""
         await self._send_message(websocket, {
             "type": MessageType.SESSION_INFO.value,
@@ -480,10 +588,10 @@ class AudioStreamer:
             }
         })
     
-    async def _send_message(self, websocket: WebSocketServerProtocol, data: Dict[str, Any]):
+    async def _send_message(self, websocket: WebSocket, data: Dict[str, Any]):
         """Send JSON message"""
         try:
-            await websocket.send(json.dumps(data))
+            await websocket.send_text(json.dumps(data))
         except Exception as e:
             logger.error(f"Failed to send message: {e}")
     

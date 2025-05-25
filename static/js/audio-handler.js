@@ -35,7 +35,12 @@ class AudioHandler {
         try {
             // Check for WebRTC support
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                throw new Error('WebRTC not supported in this browser');
+                console.warn('navigator.mediaDevices not available. This might be due to:');
+                console.warn('1. Using HTTP instead of HTTPS');
+                console.warn('2. Browser security settings');
+                console.warn('navigator.mediaDevices:', navigator.mediaDevices);
+                // Don't throw error here, let it fail when actually requesting permission
+                // throw new Error('WebRTC not supported in this browser');
             }
             
             // Check for MediaRecorder support
@@ -62,7 +67,7 @@ class AudioHandler {
         try {
             const constraints = {
                 audio: {
-                    sampleRate: this.config.sampleRate,
+                    // Don't specify sampleRate in constraints - let browser use default
                     channelCount: this.config.channels,
                     echoCancellation: true,
                     noiseSuppression: true,
@@ -84,9 +89,8 @@ class AudioHandler {
     async setupAudioContext() {
         try {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
-            this.audioContext = new AudioContext({
-                sampleRate: this.config.sampleRate
-            });
+            // Don't specify sample rate - let it match the microphone stream
+            this.audioContext = new AudioContext();
             
             // Resume audio context if suspended (required by some browsers)
             if (this.audioContext.state === 'suspended') {
@@ -126,11 +130,10 @@ class AudioHandler {
             // Setup audio context
             await this.setupAudioContext();
             
-            // Setup MediaRecorder
-            await this.setupMediaRecorder();
+            // Setup raw audio processing instead of MediaRecorder
+            await this.setupRawAudioProcessing();
             
             // Start recording
-            this.mediaRecorder.start(100); // Send data every 100ms
             this.isRecording = true;
             
             // Start audio level monitoring
@@ -273,6 +276,12 @@ class AudioHandler {
                 this.audioStream = null;
             }
             
+            // Disconnect script processor
+            if (this.scriptProcessor) {
+                this.scriptProcessor.disconnect();
+                this.scriptProcessor = null;
+            }
+            
             // Close audio context
             if (this.audioContext && this.audioContext.state !== 'closed') {
                 await this.audioContext.close();
@@ -293,6 +302,63 @@ class AudioHandler {
     
     setAudioLevelCallback(callback) {
         this.levelCallback = callback;
+    }
+    
+    async setupRawAudioProcessing() {
+        try {
+            // Create a script processor node (deprecated but still works)
+            // Using 4096 sample buffer size for ~256ms chunks at 16kHz
+            const bufferSize = 4096;
+            this.scriptProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+            
+            // Connect microphone -> script processor (no destination to avoid echo)
+            this.microphone.connect(this.scriptProcessor);
+            // Note: Not connecting to destination to avoid echo
+            
+            // Calculate downsampling ratio (browser usually 44.1kHz or 48kHz -> 16kHz)
+            const targetSampleRate = 16000;
+            const sourceSampleRate = this.audioContext.sampleRate;
+            const downsampleRatio = sourceSampleRate / targetSampleRate;
+            
+            console.log(`Audio context sample rate: ${sourceSampleRate}Hz, downsampling to ${targetSampleRate}Hz`);
+            
+            // Process audio chunks
+            this.scriptProcessor.onaudioprocess = (event) => {
+                if (!this.isRecording) return;
+                
+                // Get raw float32 samples
+                const inputData = event.inputBuffer.getChannelData(0);
+                
+                // Downsample to 16kHz
+                const downsampledLength = Math.floor(inputData.length / downsampleRatio);
+                const downsampled = new Float32Array(downsampledLength);
+                
+                for (let i = 0; i < downsampledLength; i++) {
+                    const sourceIndex = Math.floor(i * downsampleRatio);
+                    downsampled[i] = inputData[sourceIndex];
+                }
+                
+                // Convert float32 to int16 PCM
+                const pcm16 = new Int16Array(downsampledLength);
+                for (let i = 0; i < downsampledLength; i++) {
+                    // Clamp to [-1, 1] range
+                    const sample = Math.max(-1, Math.min(1, downsampled[i]));
+                    // Convert to int16
+                    pcm16[i] = Math.floor(sample * 0x7FFF);
+                }
+                
+                // Send PCM data as ArrayBuffer
+                if (this.onAudioData) {
+                    this.onAudioData(pcm16.buffer);
+                }
+            };
+            
+            console.log('Raw audio processing setup complete');
+            
+        } catch (error) {
+            console.error('Raw audio processing setup failed:', error);
+            throw error;
+        }
     }
     
     getRecordedAudio() {

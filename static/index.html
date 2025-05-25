@@ -127,6 +127,21 @@
                         </div>
                         <span>AI is thinking...</span>
                     </div>
+                    <div class="text-input-container" style="padding: 10px; border-top: 1px solid #e1e4e8;">
+                        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+                            <label style="display: flex; align-items: center; gap: 5px;">
+                                <input type="checkbox" id="enableTTSToggle" checked>
+                                <span>Enable TTS (Text-to-Speech)</span>
+                            </label>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" id="textInput" placeholder="Type a message to test LLM and TTS..." 
+                                   style="flex: 1; padding: 10px; border: 1px solid #d1d5da; border-radius: 6px; font-size: 14px;">
+                            <button id="sendTextBtn" class="control-button" style="padding: 10px 20px;">
+                                <i class="fas fa-paper-plane"></i> Send
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>

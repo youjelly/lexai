@@ -36,9 +36,17 @@ def setup_logging():
     file_handler.setLevel(log_level)
     logger.addHandler(file_handler)
     
+    # Reduce noise from various libraries
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    logging.getLogger("websockets.protocol").setLevel(logging.WARNING)
+    logging.getLogger("websockets.server").setLevel(logging.WARNING)
+    # Disable Starlette WebSocket debug messages
+    logging.getLogger("uvicorn.protocols.websockets.websockets_impl").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.protocols.websockets").setLevel(logging.WARNING)
+    logging.getLogger("fastapi").setLevel(logging.WARNING)
     
     logger.info("Logging configured successfully")
 
