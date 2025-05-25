@@ -4,19 +4,15 @@
 
 echo "Setting up Python virtual environment for LexAI..."
 
-# Check if Python 3.8+ is installed
-if ! command -v python3 &> /dev/null; then
-    echo "Error: Python 3 is not installed. Please install Python 3.8 or higher."
+# Check if Python 3.10 is installed (required for TTS)
+if ! command -v python3.10 &> /dev/null; then
+    echo "Error: Python 3.10 is not installed. Please install Python 3.10 (required for TTS compatibility)."
+    echo "Run: sudo apt-get update && sudo apt-get install -y python3.10 python3.10-venv python3.10-dev"
     exit 1
 fi
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-REQUIRED_VERSION="3.8"
-
-if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$PYTHON_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
-    echo "Error: Python $PYTHON_VERSION is installed, but Python $REQUIRED_VERSION or higher is required."
-    exit 1
-fi
+PYTHON_VERSION=$(python3.10 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+echo "Using Python $PYTHON_VERSION"
 
 # Create virtual environment
 if [ -d "venv" ]; then
@@ -25,7 +21,7 @@ if [ -d "venv" ]; then
 fi
 
 echo "Creating virtual environment with Python $PYTHON_VERSION..."
-python3 -m venv venv
+python3.10 -m venv venv
 
 # Activate virtual environment
 source venv/bin/activate
@@ -36,7 +32,7 @@ pip install --upgrade pip setuptools wheel
 
 # Install PyTorch with CUDA support for g6e instance (Ada Lovelace architecture)
 echo "Installing PyTorch with CUDA 12.1 support..."
-pip install torch==2.7.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # Install requirements
 echo "Installing requirements..."

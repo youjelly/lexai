@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from typing import Dict
+from typing import Dict, Any
 import torch
 import logging
 
@@ -17,7 +17,7 @@ async def health_check() -> Dict[str, str]:
 
 
 @router.get("/gpu")
-async def gpu_status() -> Dict[str, any]:
+async def gpu_status() -> Dict[str, Any]:
     try:
         cuda_available = torch.cuda.is_available()
         if cuda_available:

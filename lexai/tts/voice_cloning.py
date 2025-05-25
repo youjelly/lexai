@@ -21,7 +21,7 @@ from datetime import datetime
 from TTS.api import TTS
 from TTS.utils.audio import AudioProcessor
 from TTS.encoder.utils.generic_utils import setup_encoder_model
-from TTS.encoder.utils.prepare_voxceleb import extract_embedding
+# from TTS.encoder.utils.prepare_voxceleb import extract_embedding  # Not available in TTS 0.22.0
 
 from ..utils.logging import get_logger
 from config import settings

@@ -2,6 +2,14 @@
 
 Real-time multimodal AI voice assistant built with PyTorch, FastAPI, and MongoDB.
 
+## Requirements
+
+- **Python 3.10** (required for TTS compatibility)
+- CUDA-compatible GPU (tested on AWS g6e instances)
+- Ubuntu 22.04 or later
+- 16GB+ RAM recommended
+- 50GB+ storage for models
+
 ## Features
 
 - Real-time speech-to-text and text-to-speech

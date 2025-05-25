@@ -77,7 +77,7 @@ def configure_app():
         
         # Add security headers middleware
         if settings.SECURITY_HEADERS:
-            from fastapi.middleware.middleware import Middleware
+            from starlette.middleware import Middleware
             from starlette.middleware.base import BaseHTTPMiddleware
             from starlette.responses import Response
             

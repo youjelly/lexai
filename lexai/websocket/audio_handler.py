@@ -6,7 +6,7 @@ Handles audio format conversion, buffering, and real-time processing
 import numpy as np
 import asyncio
 import struct
-from typing import Optional, Union, List, Tuple, AsyncIterator
+from typing import Optional, Union, List, Tuple, AsyncIterator, Dict, Any
 from dataclasses import dataclass
 import time
 import wave
