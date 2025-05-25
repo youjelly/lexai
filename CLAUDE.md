@@ -26,10 +26,22 @@ This is **LexAI**, a production-ready real-time multimodal voice AI assistant bu
 - **WebSocket**: ws://3.129.5.177:8000/ws/audio/{session_id}
 - **Health Check**: http://3.129.5.177:8000/api/health
 
+## 🚨 Critical Storage Information
+
+**The project is located in ephemeral storage** to avoid filling the root partition:
+- **Project Location**: `/opt/dlami/nvme/lexai_new/`
+- **Original Location**: `/home/ubuntu/lexai` (moved due to disk space issues)
+- **Python Version**: Python 3.10 (required for TTS compatibility)
+
+### Storage Configuration:
+- **Ephemeral NVMe** (`/opt/dlami/nvme/`): Application, venv, pip cache, temp files
+- **Persistent EBS** (`/mnt/storage/`): Models, MongoDB data, logs
+- **Root Partition**: Only 40GB - DO NOT install large packages here!
+
 ## 📁 Project Structure
 
 ```
-/home/ubuntu/lexai/
+/opt/dlami/nvme/lexai_new/
 ├── 🎯 CORE APPLICATION
 │   ├── lexai/                   # Main Python package
 │   │   ├── api/                 # FastAPI application
@@ -313,10 +325,16 @@ tail -f /var/log/mongodb/mongod.log
 ### **When Claude Starts Next Session:**
 
 1. **Read this CLAUDE.md file first** to understand the complete project
-2. **Check current status**: Run `./scripts/health_check.sh --full`
-3. **Review logs**: Look for any errors or issues since last session
-4. **Verify external access**: Test http://3.129.5.177:8000 works
-5. **Understand environment**: Check .env file for current configuration
+2. **Check Python version**: Ensure using Python 3.10 (required for TTS)
+   ```bash
+   cd /opt/dlami/nvme/lexai_new
+   source venv/bin/activate
+   python --version  # Should show Python 3.10.x
+   ```
+3. **Check current status**: Run `./scripts/health_check.sh --full`
+4. **Review logs**: Look for any errors or issues since last session
+5. **Verify external access**: Test http://3.129.5.177:8000 works
+6. **Understand environment**: Check .env file for current configuration
 
 ### **Key Files to Check:**
 - `config.py` - Main configuration with external access settings
@@ -334,7 +352,10 @@ tail -f /var/log/mongodb/mongod.log
 
 ## ⚠️ Critical Notes
 
-1. **External Access is FULLY CONFIGURED**: Anyone on the internet can access http://3.129.5.177:8000
+1. **Project Location**: `/opt/dlami/nvme/lexai_new/` (NOT in home directory)
+2. **Python Version**: Python 3.10 REQUIRED (TTS won't work with 3.11+)
+3. **Storage**: Use ephemeral NVMe for pip cache to avoid filling root partition
+4. **External Access is FULLY CONFIGURED**: Anyone on the internet can access http://3.129.5.177:8000
 2. **No Authentication**: Currently open access for testing/demo purposes
 3. **HTTP Only**: No HTTPS/SSL configured (user preference)
 4. **Production Ready**: All services configured for stability and monitoring

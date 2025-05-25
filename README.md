@@ -20,24 +20,25 @@ Real-time multimodal AI voice assistant built with PyTorch, FastAPI, and MongoDB
 
 ## Installation
 
-1. Create and activate a virtual environment:
+**⚠️ Important**: Clone this repository to ephemeral storage on AWS EC2 to avoid filling the root partition.
+
+See [INSTALLATION.md](INSTALLATION.md) for detailed storage setup instructions.
+
+### Quick Start
+
 ```bash
+# Clone to ephemeral storage (AWS EC2)
+cd /opt/dlami/nvme
+git clone https://github.com/yourusername/lexai.git
+cd lexai
+
+# Run setup
 ./setup_venv.sh
 source venv/bin/activate
-```
 
-2. Install the package:
-```bash
-pip install -e .
-```
-
-3. Copy environment configuration:
-```bash
+# Configure and start
 cp .env.example .env
-```
-
-4. Start the server:
-```bash
+nano .env  # Add HuggingFace token
 python main.py
 ```
 

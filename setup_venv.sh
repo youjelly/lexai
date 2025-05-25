@@ -26,6 +26,14 @@ python3.10 -m venv venv
 # Activate virtual environment
 source venv/bin/activate
 
+# Configure pip to use ephemeral storage to avoid filling root partition
+export PIP_CACHE_DIR=/opt/dlami/nvme/pip_cache
+export TMPDIR=/opt/dlami/nvme/tmp
+mkdir -p $PIP_CACHE_DIR $TMPDIR
+
+echo "Configured pip cache to use ephemeral storage: $PIP_CACHE_DIR"
+echo "Configured temp directory: $TMPDIR"
+
 # Upgrade pip
 echo "Upgrading pip..."
 pip install --upgrade pip setuptools wheel
@@ -38,12 +46,8 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 echo "Installing requirements..."
 pip install -r requirements.txt
 
-# Install pydantic-settings separately as it's not in requirements.txt
-pip install pydantic-settings
-
-# Install additional dependencies for model support
-echo "Installing additional dependencies..."
-pip install accelerate GPUtil
+# Note: pydantic-settings is now included in requirements.txt
+# Note: accelerate and GPUtil are now included in requirements.txt
 
 # Create necessary directories
 echo "Creating project directories..."
