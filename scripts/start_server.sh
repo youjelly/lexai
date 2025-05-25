@@ -155,6 +155,28 @@ start_manual() {
         --use-colors
 }
 
+# Start service in production mode (no systemd)
+start_production() {
+    log "Starting LexAI in production mode..."
+    
+    cd "$PROJECT_ROOT"
+    source "$VENV_PATH/bin/activate"
+    
+    # Export environment variables
+    export PYTHONPATH="$PROJECT_ROOT"
+    export ENVIRONMENT="production"
+    
+    # Load .env file
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        export $(cat "$PROJECT_ROOT/.env" | grep -v '^#' | xargs)
+    fi
+    
+    # Start without auto-reload for production
+    log "Starting production server..."
+    log "Server will be accessible externally on all interfaces (0.0.0.0:8000)"
+    exec python "$PROJECT_ROOT/main.py"
+}
+
 # Health check
 health_check() {
     log "Performing health check..."
@@ -177,16 +199,18 @@ health_check() {
 
 # Show usage
 usage() {
-    echo "Usage: $0 [--dev|--systemd]"
+    echo "Usage: $0 [--dev|--production|--systemd]"
     echo ""
     echo "Options:"
-    echo "  --dev      Start in development mode with auto-reload"
-    echo "  --systemd  Start using systemd service (default)"
+    echo "  --dev         Start in development mode with auto-reload"
+    echo "  --production  Start in production mode (no systemd, no auto-reload)"
+    echo "  --systemd     Start using systemd service (default)"
     echo ""
     echo "Examples:"
-    echo "  $0              # Start production service"
-    echo "  $0 --dev        # Start development server"
-    echo "  $0 --systemd    # Explicitly use systemd"
+    echo "  $0                  # Start using systemd service"
+    echo "  $0 --dev            # Start development server with auto-reload"
+    echo "  $0 --production     # Start production server without systemd"
+    echo "  $0 --systemd        # Explicitly use systemd"
 }
 
 # Main function
@@ -202,6 +226,10 @@ main() {
                 ;;
             --systemd)
                 MODE="systemd"
+                shift
+                ;;
+            --production|--prod)
+                MODE="production"
                 shift
                 ;;
             -h|--help)
@@ -253,6 +281,17 @@ main() {
             log ""
             log "IMPORTANT: Ensure EC2 Security Group allows inbound traffic on port 8000"
             start_manual
+            ;;
+        production)
+            log ""
+            log "Starting production server (no auto-reload)..."
+            log "Local API URL: http://localhost:8000"
+            log "External API URL: http://\$EC2_PUBLIC_IP:8000 (replace with your EC2 public IP)"
+            log "API Docs: http://localhost:8000/docs"
+            log "Web Interface: http://\$EC2_PUBLIC_IP:8000/"
+            log "Press Ctrl+C to stop"
+            log ""
+            start_production
             ;;
     esac
 }

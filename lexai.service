@@ -1,0 +1,50 @@
+[Unit]
+Description=LexAI - Real-time Multimodal Voice AI Assistant
+Documentation=https://github.com/yourusername/lexai
+After=network.target mongodb.service
+Wants=mongodb.service
+
+[Service]
+Type=exec
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/dlami/nvme/lexai_new
+Environment="PATH=/opt/dlami/nvme/lexai_new/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PYTHONPATH=/opt/dlami/nvme/lexai_new"
+Environment="PYTHONUNBUFFERED=1"
+
+# Load environment variables from .env file
+EnvironmentFile=/opt/dlami/nvme/lexai_new/.env
+
+# Start command
+ExecStart=/opt/dlami/nvme/lexai_new/venv/bin/python /opt/dlami/nvme/lexai_new/main.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security settings (optional, uncomment as needed)
+# PrivateTmp=true
+# NoNewPrivileges=true
+# ProtectSystem=strict
+# ProtectHome=true
+# ReadWritePaths=/opt/dlami/nvme/lexai_new /mnt/storage
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lexai
+
+[Install]
+WantedBy=multi-user.target
