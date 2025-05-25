@@ -26,7 +26,7 @@ class LexAIApp {
             // Determine if we're running on localhost or external server
             wsProtocol: window.location.protocol === 'https:' ? 'wss:' : 'ws:',
             host: window.location.hostname,
-            port: window.location.port || '8000',
+            port: window.location.port || (window.location.protocol === 'https:' ? '443' : '8000'),
             apiBaseUrl: window.location.origin,
             reconnectAttempts: 0,
             maxReconnectAttempts: 5,
@@ -162,7 +162,9 @@ class LexAIApp {
         this.showLoading('Connecting to LexAI...');
         
         try {
-            const wsUrl = `${this.config.wsProtocol}//${this.config.host}:${this.config.port}/api/ws/audio/${this.sessionId || 'new'}`;
+            // Don't include port for standard HTTPS/WSS (443)
+            const portPart = (this.config.port === '443' || this.config.port === '80') ? '' : `:${this.config.port}`;
+            const wsUrl = `${this.config.wsProtocol}//${this.config.host}${portPart}/api/ws/audio/${this.sessionId || 'new'}`;
             console.log('Connecting to:', wsUrl);
             
             this.websocket = new WebSocket(wsUrl);
@@ -247,18 +249,23 @@ class LexAIApp {
                 break;
                 
             case 'transcription':
-                this.addMessage('user', message.text, {
-                    confidence: message.confidence,
-                    language: message.language
-                });
+                // User's speech transcript
+                if (message.text && message.text.trim()) {
+                    this.addMessage('user', message.text, {
+                        confidence: message.confidence,
+                        language: message.language
+                    });
+                }
                 break;
                 
             case 'transcript':
-                // Handle both user transcripts and AI responses
+                // AI response transcript
                 this.hideTypingIndicator();
-                this.addMessage('assistant', message.text, {
-                    processingTime: message.processing_time_ms
-                });
+                if (message.text && message.text.trim()) {
+                    this.addMessage('assistant', message.text, {
+                        processingTime: message.processing_time_ms
+                    });
+                }
                 break;
                 
             case 'response':

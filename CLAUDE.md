@@ -13,12 +13,12 @@ This is **LexAI**, a production-ready real-time multimodal voice AI assistant bu
 ## 🏗️ Complete Architecture
 
 ### **Core Technologies:**
-- **AI Model**: Ultravox v0.5 Llama 3.1 8B (fixie-ai/ultravox-v0_5-llama-3_1-8b)
-- **TTS**: Coqui TTS XTTS v2 with voice cloning
+- **AI Model**: Ultravox v0.5 Llama 3.1 8B (fixie-ai/ultravox-v0_5-llama-3_1-8b) with 8-bit quantization
+- **TTS**: Coqui TTS VITS for English (default), XTTS v2 for multilingual/voice cloning
 - **Backend**: FastAPI with WebSocket support
 - **Database**: MongoDB for conversation storage
-- **Frontend**: Modern web interface (HTML/CSS/JS)
-- **Deployment**: Production-ready with monitoring and backup
+- **Frontend**: Modern web interface with real-time audio streaming
+- **Deployment**: Production-ready with systemd, monitoring, and Nginx for HTTPS
 
 ### **Key URLs:**
 - **Web Interface**: http://3.129.5.177:8000
@@ -126,18 +126,20 @@ CORS_ALLOW_CREDENTIALS=true     # For WebSocket auth
 - ✅ **WebSocket URLs**: Use public IP instead of localhost
 - ✅ **GPU Optimization**: TF32 enabled for g6e instances
 - ✅ **Security**: Production headers and rate limiting
-- ✅ **No Quantization**: Full model quality for Ultravox
+- ✅ **8-bit Quantization**: Ultravox uses bitsandbytes for memory efficiency
 
 ## 🔧 Development Context
 
 ### **Important Implementation Details:**
 
-1. **No Quantization Used**: Ultravox model runs at full fp16 precision for quality
-2. **No VAD Required**: Multimodal model naturally handles speech pauses
-3. **External WebSocket**: Fixed hardcoded localhost in system.py endpoints
+1. **8-bit Quantization**: Ultravox model uses bitsandbytes quantization (31GB → 5GB)
+2. **Multimodal Conversational**: Ultravox handles both speech understanding and response generation
+3. **External WebSocket**: Properly configured for public IP access
 4. **Dual Storage**: Persistent SSD (/mnt/storage) + ephemeral NVMe (/opt/dlami/nvme)
-5. **Voice Cloning**: 10-30 second samples, multilingual support
-6. **Real-time Audio**: WebSocket binary streaming with opus codec
+5. **Voice Models**: VITS for fast English, XTTS v2 for multilingual/cloning
+6. **Real-time Audio**: WebSocket binary streaming with PCM16 encoding
+7. **Model Preloading**: TTS loads at startup for instant responses
+8. **Smart Interruption**: Only interrupts TTS on meaningful speech, not noise
 
 ### **Key Dependencies:**
 ```python
@@ -376,7 +378,7 @@ The LexAI system is fully deployed and accessible at **http://3.129.5.177:8000**
 
 ## 📝 Recent Updates (Session 5/25/2025)
 
-### **Major Improvements:**
+### **Part 1 - Initial Improvements:**
 
 1. **Text Input Testing Interface**
    - Added text input field with Send button for testing LLM + TTS pipeline
@@ -403,29 +405,65 @@ The LexAI system is fully deployed and accessible at **http://3.129.5.177:8000**
    - Fixed PCM16 to Float32 conversion with proper little-endian byte order
    - Added audio queue management for smooth playback
 
-### **Known Issues & TODOs:**
+### **Part 2 - Major Architecture Fixes:**
 
-1. **Audio Quality**
-   - Poor transcription quality from speech input (getting random characters)
-   - Need to investigate audio capture/encoding from browser
+1. **Fixed Disk Space Issues**
+   - Configured HuggingFace cache to use ephemeral storage (`/opt/dlami/nvme/.cache/huggingface`)
+   - Prevents root partition from filling up during model downloads
+   - Added proper environment variables for all HF cache locations
 
-2. **Memory Management**
-   - Still tight on GPU memory with both models loaded
-   - Consider using CPU for TTS or further quantization
+2. **HTTPS/SSL Configuration**
+   - Set up Nginx as reverse proxy for SSL termination
+   - Fixed WebSocket routing through Nginx (`/api/ws/` path)
+   - Updated frontend to properly construct WebSocket URLs for HTTPS
+   - Created separate `.env.https` configuration file
 
-3. **Voice Features**
-   - XTTS v2 requires voice samples - need to implement default voice handling
-   - Voice cloning interface needs testing
+3. **Fixed Audio Pipeline**
+   - Discovered Ultravox is a multimodal conversational model (not just transcription)
+   - Fixed double response issue - Ultravox generates responses directly from audio
+   - Implemented proper audio flow: Audio → Ultravox (transcribe + respond) → TTS
+   - Added comprehensive logging to track model outputs
+
+4. **TTS Improvements**
+   - Changed default TTS from XTTS v2 to VITS for English (faster, no voice samples needed)
+   - Implemented TTS model preloading at startup (~1 second load time)
+   - TTS now responds instantly without model loading delays
+   - Non-blocking audio output queue for smooth streaming
+
+5. **Response Quality**
+   - Updated system prompts to handle noise/silence better
+   - Model responds with "." for silence (filtered from TTS)
+   - Limited responses to 1-2 sentences for conciseness
+   - Fixed language consistency (always English unless requested)
+
+6. **UI/UX Improvements**
+   - Fixed transcript display - now shows user speech in chat
+   - AI responses display properly without "I heard you say" prefixes
+   - Implemented smart TTS interruption only for meaningful speech
+   - Added noise pattern filtering
+
+### **Current Architecture:**
+- **Text Input**: User text → Ultravox LLM → Response → VITS TTS → Audio
+- **Audio Input**: User audio → Ultravox (multimodal) → Response → VITS TTS → Audio
+- **Models**: Ultravox (8-bit quantized) + VITS (preloaded)
+- **Memory**: ~31GB GPU usage with both models loaded
 
 ### **Configuration Updates:**
 - Added `bitsandbytes>=0.41.0` to requirements for quantization
 - Set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` for better memory
-- Reduced WebSocket chunk delays for faster streaming
-- Disabled verbose logging from uvicorn WebSocket implementation
+- HuggingFace cache redirected to ephemeral storage
+- Default TTS changed from XTTS v2 to VITS
+- Updated system prompts for better conversation quality
 
-### **Next Steps:**
-1. Fix audio capture quality for speech input
-2. Implement better default voice handling for XTTS v2
-3. Add voice selection UI integration
-4. Test and optimize memory usage further
-5. Add error recovery for GPU OOM situations
+### **Resolved Issues:**
+- ✅ Disk space problems (HF cache on ephemeral storage)
+- ✅ Poor speech recognition (was getting responses, not transcriptions)
+- ✅ TTS loading delays (preloaded at startup)
+- ✅ Double responses (fixed audio pipeline understanding)
+- ✅ Choppy TTS playback (non-blocking queue implementation)
+- ✅ UI not showing transcripts (fixed message types)
+
+### **Known Limitations:**
+1. **Ultravox Behavior**: The model is conversational by design - it generates responses to audio, not just transcriptions
+2. **GPU Memory**: Running close to limits with both models (consider using smaller models if needed)
+3. **No User Transcript**: For audio input, we only get the AI's response, not what the user said

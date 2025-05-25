@@ -158,27 +158,22 @@ def main():
         settings.optimize_for_g6e()
         logger.info("Applied g6e instance optimizations")
     
-    # Preload models for faster first request - DISABLED due to memory constraints
-    # Models will load on demand to avoid OOM
-    if settings.ENVIRONMENT.value == "production" and False:  # Disabled
-        logger.info("Preloading AI models...")
+    # Preload TTS model for faster first request
+    if settings.ENVIRONMENT.value == "production":
+        logger.info("Preloading TTS model...")
         try:
-            from lexai.models.ultravox_service import UltravoxService
-            from lexai.tts.tts_service import TTSService
+            from lexai.tts import multilingual_tts
             import asyncio
             
-            # Initialize Ultravox model
-            ultravox = UltravoxService()
-            asyncio.run(ultravox.initialize())
-            logger.info("Ultravox model preloaded")
-            
             # Initialize TTS model
-            tts = TTSService()
-            tts.load_model("tts_models/multilingual/multi-dataset/xtts_v2")
-            logger.info("TTS model preloaded")
+            async def init_tts():
+                await multilingual_tts.initialize()
+            
+            asyncio.run(init_tts())
+            logger.info("TTS model preloaded successfully")
             
         except Exception as e:
-            logger.error(f"Failed to preload models: {e}")
+            logger.error(f"Failed to preload TTS model: {e}")
             # Continue anyway - models will load on demand
     
     # Validate system

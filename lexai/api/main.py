@@ -38,6 +38,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to preload Ultravox model: {e}")
     
+    # Preload TTS model
+    logger.info("Preloading TTS model...")
+    try:
+        from ..tts import multilingual_tts
+        # Initialize multilingual TTS (which will load the appropriate model)
+        await multilingual_tts.initialize()
+        logger.info("TTS model loaded successfully")
+    except Exception as e:
+        logger.error(f"Failed to preload TTS model: {e}")
+    
     logger.info("LexAI API started successfully")
     
     yield

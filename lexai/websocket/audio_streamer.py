@@ -17,6 +17,7 @@ import base64
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
+from websockets.exceptions import ConnectionClosed
 
 from ..models import streaming_inference, StreamConfig
 from ..tts import voice_manager, multilingual_tts
@@ -98,6 +99,10 @@ class AudioStreamer:
         # Audio buffers
         self.input_buffer = asyncio.Queue(maxsize=100)
         self.output_buffer = asyncio.Queue(maxsize=100)
+        
+        # Audio output queue for non-blocking streaming
+        self.audio_output_queue = asyncio.Queue(maxsize=1000)
+        self.audio_output_task = None
         
         # Processing state
         self.is_streaming = False
@@ -253,6 +258,11 @@ class AudioStreamer:
                 self._audio_synthesis_loop(websocket)
             )
         
+        # Start audio output task for non-blocking streaming
+        self.audio_output_task = asyncio.create_task(
+            self._audio_output_loop(websocket)
+        )
+        
         # Send status
         await self._send_status(websocket, "streaming")
         
@@ -271,6 +281,8 @@ class AudioStreamer:
             self.processing_task.cancel()
         if self.synthesis_task:
             self.synthesis_task.cancel()
+        if self.audio_output_task:
+            self.audio_output_task.cancel()
         
         # Send status
         await self._send_status(websocket, "stopped")
@@ -286,48 +298,29 @@ class AudioStreamer:
             # Log data info for debugging
             logger.debug(f"Received audio data: {len(data)} bytes")
             
-            # Try to decode as WebM/Opus first (what browsers send)
-            try:
-                # Use soundfile to decode the audio
-                import soundfile as sf
-                import io
+            # Since we know the browser sends raw PCM16, decode directly
+            # Decode audio based on encoding
+            if self.config.encoding == "pcm16":
+                # Check if data length is valid for int16
+                if len(data) % 2 != 0:
+                    logger.warning(f"Audio data length {len(data)} not aligned for int16, padding")
+                    data = data + b'\x00'  # Pad with zero byte
                 
-                # Create a file-like object from bytes
-                audio_io = io.BytesIO(data)
+                # Convert bytes to int16 array (little-endian)
+                audio = np.frombuffer(data, dtype='<i2')  # '<' for little-endian, 'i2' for int16
+                # Convert to float32 normalized
+                audio = audio.astype(np.float32) / 32768.0
                 
-                # Read audio data
-                audio, sample_rate = sf.read(audio_io, dtype='float32')
-                
-                # Resample if needed (Ultravox expects 16kHz)
-                if sample_rate != 16000:
-                    import librosa
-                    audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
-                
-                logger.debug(f"Decoded audio: {len(audio)} samples at {sample_rate}Hz")
-                
-            except Exception as decode_error:
-                # Fall back to raw PCM decoding
-                logger.debug(f"WebM decode failed, trying PCM: {decode_error}")
-                
-                # Decode audio based on encoding
-                if self.config.encoding == "pcm16":
-                    # Check if data length is valid for int16
-                    if len(data) % 2 != 0:
-                        logger.warning(f"Audio data length {len(data)} not aligned for int16, padding")
-                        data = data + b'\x00'  # Pad with zero byte
-                    
-                    # Convert bytes to int16 array
-                    audio = np.frombuffer(data, dtype=np.int16)
-                    # Convert to float32 normalized
-                    audio = audio.astype(np.float32) / 32768.0
-                elif self.config.encoding == "pcm32":
-                    audio = np.frombuffer(data, dtype=np.int32)
-                    audio = audio.astype(np.float32) / 2147483648.0
-                elif self.config.encoding == "float32":
-                    audio = np.frombuffer(data, dtype=np.float32)
-                else:
-                    logger.error(f"Unsupported encoding: {self.config.encoding}")
-                    return
+                # Debug: log some statistics
+                logger.debug(f"Audio stats - samples: {len(audio)}, min: {audio.min():.3f}, max: {audio.max():.3f}, mean: {audio.mean():.3f}, std: {audio.std():.3f}")
+            elif self.config.encoding == "pcm32":
+                audio = np.frombuffer(data, dtype=np.int32)
+                audio = audio.astype(np.float32) / 2147483648.0
+            elif self.config.encoding == "float32":
+                audio = np.frombuffer(data, dtype=np.float32)
+            else:
+                logger.error(f"Unsupported encoding: {self.config.encoding}")
+                return
             
             # Handle multi-channel
             if self.config.channels > 1:
@@ -410,6 +403,13 @@ class AudioStreamer:
                             self._audio_synthesis_loop(websocket)
                         )
                 
+                # Ensure audio output task is running
+                if not self.audio_output_task or self.audio_output_task.done():
+                    logger.info("Starting audio output task...")
+                    self.audio_output_task = asyncio.create_task(
+                        self._audio_output_loop(websocket)
+                    )
+                
                 # Add text to synthesis queue
                 await self.output_buffer.put(response_text)
             else:
@@ -440,12 +440,44 @@ class AudioStreamer:
                 inference_config=None
             ):
                 if result["type"] == "transcription":
-                    # Send transcript
-                    await self._send_transcript(websocket, result)
+                    # Log what we received from Ultravox
+                    text = result.get("text", "").strip()
+                    logger.info(f"Received response from Ultravox: '{text}'")
+                    logger.info(f"Response type: {type(text)}, length: {len(text)}")
                     
-                    # If bidirectional, generate response
-                    if self.config.bidirectional and result.get("text"):
-                        await self._generate_response(result["text"])
+                    # For audio input, Ultravox returns a conversational response, not a transcription
+                    # We should send this as the AI response and synthesize it
+                    
+                    # Send as AI response (not user transcript)
+                    await self._send_message(websocket, {
+                        "type": MessageType.TRANSCRIPT.value,  # AI response
+                        "text": text,
+                        "timestamp": time.time()
+                    })
+                    
+                    # Check if this is meaningful response to synthesize
+                    # Filter out silence indicator and common noise/filler responses
+                    noise_patterns = [".", "de", "de.", "...", "mm", "um", "uh", "ah", "hm", "hmm", "huh", "oh", "aa", "eh", "hh"]
+                    is_noise = text.strip() in noise_patterns or len(text.strip()) < 2
+                    
+                    # Queue response for TTS synthesis if meaningful
+                    if self.config.bidirectional and text and not is_noise:
+                        logger.info(f"Queueing Ultravox response for TTS: {text[:50]}...")
+                        
+                        # Ensure synthesis loop is running
+                        if not self.synthesis_task or self.synthesis_task.done():
+                            self.synthesis_task = asyncio.create_task(
+                                self._audio_synthesis_loop(websocket)
+                            )
+                        
+                        # Ensure audio output task is running
+                        if not self.audio_output_task or self.audio_output_task.done():
+                            self.audio_output_task = asyncio.create_task(
+                                self._audio_output_loop(websocket)
+                            )
+                        
+                        # Add response text to synthesis queue
+                        await self.output_buffer.put(text)
                 
                 elif result["type"] == "error":
                     await self._send_error(websocket, result["error"])
@@ -493,16 +525,79 @@ class AudioStreamer:
             logger.error(f"Audio synthesis error: {e}")
             await self._send_error(websocket, str(e))
     
-    async def _generate_response(self, transcript: str):
+    async def _generate_response(self, transcript: str, websocket: WebSocket):
         """Generate response for transcript"""
-        # This is a placeholder - in real implementation,
-        # you would process the transcript and generate appropriate response
-        
-        # For now, just echo back
-        response = f"I heard you say: {transcript}"
-        
-        # Add to synthesis queue
-        await self.output_buffer.put(response)
+        try:
+            # Get Ultravox service singleton
+            ultravox_service = await model_services.get_ultravox()
+            
+            # Generate a conversational response to the transcript
+            logger.info(f"Generating response for transcript: {transcript[:50]}...")
+            response_text = ""
+            
+            # Use Ultravox to generate a response
+            async for chunk in ultravox_service.process_text(transcript):
+                response_text += chunk
+            
+            logger.info(f"Generated response: {response_text[:100]}...")
+            
+            # Send the response back to client as AI response
+            await self._send_message(websocket, {
+                "type": MessageType.TRANSCRIPT.value,
+                "text": response_text,
+                "timestamp": time.time()
+            })
+            
+            # Queue response for TTS synthesis
+            if self.config.bidirectional and response_text:
+                logger.info(f"Queueing response for TTS: {response_text[:50]}...")
+                
+                # Ensure synthesis loop is running
+                if not self.synthesis_task or self.synthesis_task.done():
+                    self.synthesis_task = asyncio.create_task(
+                        self._audio_synthesis_loop(websocket)
+                    )
+                
+                # Ensure audio output task is running
+                if not self.audio_output_task or self.audio_output_task.done():
+                    self.audio_output_task = asyncio.create_task(
+                        self._audio_output_loop(websocket)
+                    )
+                
+                # Add response text to synthesis queue
+                await self.output_buffer.put(response_text)
+                
+        except Exception as e:
+            logger.error(f"Error generating response: {e}")
+    
+    async def _audio_output_loop(self, websocket: WebSocket):
+        """Handle audio output streaming without blocking"""
+        logger.info(f"Audio output loop started for session {self.session_id}")
+        try:
+            while self.is_streaming:
+                try:
+                    # Get audio chunk from output queue
+                    chunk_data = await asyncio.wait_for(
+                        self.audio_output_queue.get(),
+                        timeout=0.1  # Short timeout for responsive streaming
+                    )
+                    
+                    logger.debug(f"Sending audio chunk: {len(chunk_data['audio'])} bytes")
+                    
+                    # Send audio chunk
+                    await websocket.send_bytes(chunk_data['audio'])
+                    
+                    # Send metadata
+                    if chunk_data.get('metadata'):
+                        await self._send_message(websocket, chunk_data['metadata'])
+                    
+                except asyncio.TimeoutError:
+                    continue
+                    
+        except asyncio.CancelledError:
+            logger.debug(f"Audio output loop cancelled for session {self.session_id}")
+        except Exception as e:
+            logger.error(f"Audio output error: {e}")
     
     async def _stream_audio_response(self, websocket: WebSocket, audio: np.ndarray):
         """Stream audio response in chunks"""
@@ -519,21 +614,34 @@ class AudioStreamer:
         # Calculate chunk size in bytes
         chunk_bytes = self.config.chunk_samples * self.config.bytes_per_sample
         
-        # Stream chunks
+        # Queue chunks for non-blocking streaming
+        total_chunks = (len(audio_bytes) + chunk_bytes - 1) // chunk_bytes
+        logger.info(f"Queueing {total_chunks} audio chunks for streaming")
+        
         for i in range(0, len(audio_bytes), chunk_bytes):
             chunk = audio_bytes[i:i + chunk_bytes]
             
-            # Send as binary message
-            await websocket.send_bytes(chunk)
+            # Queue audio chunk with metadata
+            chunk_data = {
+                'audio': chunk,
+                'metadata': {
+                    "type": MessageType.AUDIO_RESPONSE.value,
+                    "chunk_index": i // chunk_bytes,
+                    "total_chunks": total_chunks,
+                    "sample_rate": 22050,  # TTS output rate
+                    "duration_ms": len(chunk) / self.config.bytes_per_sample / 22050 * 1000
+                }
+            }
             
-            # Also send metadata
-            await self._send_message(websocket, {
-                "type": MessageType.AUDIO_RESPONSE.value,
-                "chunk_index": i // chunk_bytes,
-                "total_chunks": (len(audio_bytes) + chunk_bytes - 1) // chunk_bytes,
-                "sample_rate": 22050,  # TTS output rate
-                "duration_ms": len(chunk) / self.config.bytes_per_sample / 22050 * 1000
-            })
+            # Put in queue without blocking
+            try:
+                self.audio_output_queue.put_nowait(chunk_data)
+                logger.debug(f"Queued chunk {i // chunk_bytes + 1}/{total_chunks}")
+            except asyncio.QueueFull:
+                # If queue is full, wait a bit
+                logger.debug("Audio output queue full, waiting...")
+                await asyncio.sleep(0.01)
+                await self.audio_output_queue.put(chunk_data)
             
             self.stats["chunks_sent"] += 1
             
@@ -542,8 +650,9 @@ class AudioStreamer:
     
     async def _send_transcript(self, websocket: WebSocket, result: Dict[str, Any]):
         """Send transcript result"""
+        # Send as 'transcription' type for user speech
         await self._send_message(websocket, {
-            "type": MessageType.TRANSCRIPT.value,
+            "type": "transcription",  # Changed from TRANSCRIPT to match frontend
             "text": result.get("text", ""),
             "language": result.get("language"),
             "duration_ms": result.get("audio_duration_ms", 0),

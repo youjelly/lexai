@@ -14,6 +14,7 @@ from dataclasses import dataclass, asdict, field
 import shutil
 
 from ..database import operations as db_ops
+from ..database.models import Conversation
 from ..utils.logging import get_logger
 from config import settings
 
@@ -109,15 +110,16 @@ class SessionManager:
         
         # Create conversation in database
         try:
-            conversation = await db_ops.create_conversation(
-                user_id=user_id,
+            conversation_obj = Conversation(
+                user_id=user_id or "anonymous",  # Default to anonymous if no user_id
                 metadata={
                     "session_id": session_id,
                     "client_info": client_info,
                     "type": "websocket_stream"
                 }
             )
-            session.conversation_id = str(conversation.id)
+            conversation_id = await db_ops.create_conversation(conversation_obj)
+            session.conversation_id = conversation_id
         except Exception as e:
             logger.error(f"Failed to create conversation: {e}")
         

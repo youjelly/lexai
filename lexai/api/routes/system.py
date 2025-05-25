@@ -204,7 +204,7 @@ async def api_info():
             "sample_rate": settings.SAMPLE_RATE
         },
         "endpoints": {
-            "websocket": f"ws://{settings.EXTERNAL_HOST or '3.129.5.177'}:{settings.PORT}/ws/audio/{{session_id}}",
+            "websocket": f"{'wss' if settings.PORT == 8443 else 'ws'}://{settings.EXTERNAL_HOST or '3.129.5.177'}:{settings.PORT}/ws/audio/{{session_id}}",
             "api_docs": "/api/docs",
             "health": "/api/health"
         }

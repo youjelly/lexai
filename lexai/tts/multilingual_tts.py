@@ -108,6 +108,24 @@ class MultilingualTTS:
         
         # Default configuration
         self.default_config = MultilingualConfig()
+        
+        # Default voice sample for XTTS v2
+        self.default_voice_sample = None
+    
+    async def initialize(self):
+        """Initialize the multilingual TTS service"""
+        logger.info("Initializing multilingual TTS service...")
+        
+        # Initialize the TTS service with default model
+        await self.tts_service.initialize()
+        
+        # Log which model was loaded
+        logger.info(f"Default TTS model loaded: {self.tts_service.default_model}")
+        
+        # If using VITS, we're good to go for English
+        # If using XTTS v2, it will need voice samples
+        
+        logger.info("Multilingual TTS service initialized")
     
     def _load_model_registry(self) -> Dict[str, Any]:
         """Load model registry to know available languages"""

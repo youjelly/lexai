@@ -54,8 +54,8 @@ class TTSService:
         self.loaded_models: Dict[str, TTS] = {}
         self.model_lock = threading.Lock()
         
-        # Default model
-        self.default_model = "tts_models/multilingual/multi-dataset/xtts_v2"
+        # Default model - Use VITS for English since it's faster and doesn't need voice samples
+        self.default_model = "tts_models/en/vctk/vits"
         
         # Initialize paths
         self._init_paths()
