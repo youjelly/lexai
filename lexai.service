@@ -12,6 +12,7 @@ WorkingDirectory=/opt/dlami/nvme/lexai_new
 Environment="PATH=/opt/dlami/nvme/lexai_new/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="PYTHONPATH=/opt/dlami/nvme/lexai_new"
 Environment="PYTHONUNBUFFERED=1"
+Environment="PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 
 # Load environment variables from .env file
 EnvironmentFile=/opt/dlami/nvme/lexai_new/.env

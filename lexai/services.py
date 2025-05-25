@@ -35,6 +35,12 @@ class ModelServices:
         async with self._lock:
             if self.ultravox_service is None:
                 logger.info("Creating Ultravox service instance")
+                # Force garbage collection before loading
+                import torch
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                
                 self.ultravox_service = UltravoxService()
                 await self.ultravox_service.initialize()
             return self.ultravox_service

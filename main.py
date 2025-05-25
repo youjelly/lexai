@@ -158,8 +158,9 @@ def main():
         settings.optimize_for_g6e()
         logger.info("Applied g6e instance optimizations")
     
-    # Preload models for faster first request
-    if settings.ENVIRONMENT.value == "production":
+    # Preload models for faster first request - DISABLED due to memory constraints
+    # Models will load on demand to avoid OOM
+    if settings.ENVIRONMENT.value == "production" and False:  # Disabled
         logger.info("Preloading AI models...")
         try:
             from lexai.models.ultravox_service import UltravoxService
