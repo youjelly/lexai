@@ -321,9 +321,10 @@ create_env_file() {
     if [ ! -f "$PROJECT_ROOT/.env" ]; then
         cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
         
-        # Generate secure secret key
-        SECRET_KEY=$(openssl rand -hex 32)
-        sed -i "s/your-secret-key-here/$SECRET_KEY/" "$PROJECT_ROOT/.env"
+        # Note: SECRET_KEY not needed for HTTP-only deployment
+        # Uncomment below if you plan to add authentication later:
+        # SECRET_KEY=$(openssl rand -hex 32)
+        # sed -i "s/your-secret-key-here/$SECRET_KEY/" "$PROJECT_ROOT/.env"
         
         warning "Please edit $PROJECT_ROOT/.env to add your HuggingFace token and other credentials"
     fi
