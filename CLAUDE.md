@@ -467,3 +467,43 @@ The LexAI system is fully deployed and accessible at **http://3.129.5.177:8000**
 1. **Ultravox Behavior**: The model is conversational by design - it generates responses to audio, not just transcriptions
 2. **GPU Memory**: Running close to limits with both models (consider using smaller models if needed)
 3. **No User Transcript**: For audio input, we only get the AI's response, not what the user said
+
+### **Part 3 - Voice Activity Detection (VAD) Implementation:**
+
+1. **VAD Toggle Feature**
+   - Added VAD (Voice Activity Detection) toggle switch in UI next to TTS toggle
+   - VAD can be enabled/disabled on-the-fly without reloading
+   - Energy-based VAD with configurable thresholds and smoothing
+
+2. **Auto-Recording Functionality** 
+   - When VAD enabled: Automatically starts recording when voice is detected
+   - Automatically stops recording after detecting silence (10 frames threshold)
+   - No manual intervention needed - works like Alexa/Siri wake detection
+
+3. **Manual Recording Protection**
+   - Manual push-to-talk (button/spacebar) still works with VAD enabled
+   - Added `manualRecording` flag to prevent VAD from interfering with manual control
+   - Manual recordings won't be auto-stopped by VAD
+
+4. **VAD Technical Details**
+   - Energy-based detection with exponential smoothing (factor: 0.95)
+   - Configurable thresholds: 3 frames for speech, 10 frames for silence
+   - Continues monitoring during recording to detect when to stop
+   - Visual feedback: Button shows "Voice detected" status
+
+5. **UI States with VAD**
+   - **VAD Enabled + Waiting**: "Waiting for voice..."
+   - **VAD Enabled + Voice Detected**: "Voice detected - Recording..."
+   - **VAD Enabled + Silence**: "Silence detected - Stopping..."
+   - **VAD Disabled**: "Hold Space or click to talk" (manual mode)
+
+### **Script Fixes:**
+- Fixed `start_server.sh` script bug using `-d` (directory) instead of `-f` (file) check
+- Model check now properly validates `/mnt/storage/models/ultravox/config.json`
+
+### **Current VAD Configuration:**
+- Energy threshold: 0.01
+- Smoothing frames: 3
+- Min speech frames: 3
+- Min silence frames: 10
+- Exponential smoothing: 0.95
