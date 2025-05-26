@@ -8,6 +8,7 @@ class LexAIApp {
         this.websocket = null;
         this.sessionId = null;
         this.isRecording = false;
+        this.manualRecording = false;  // Track if recording was started manually
         this.isConnected = false;
         this.audioHandler = null;
         this.voiceManager = null;
@@ -49,6 +50,38 @@ class LexAIApp {
         try {
             this.audioHandler = new AudioHandler();
             await this.audioHandler.init();
+            
+            // Set up VAD callback to auto-start/stop recording when VAD is enabled
+            this.audioHandler.setVoiceActivityCallback((isActive) => {
+                if (this.elements.enableVADToggle.checked) {  // Only auto-record when VAD is enabled
+                    if (isActive && !this.isRecording && !this.manualRecording) {
+                        // Auto-start recording on voice detection
+                        console.log('VAD: Auto-starting recording on voice detection');
+                        this.elements.recordBtn.classList.add('voice-detected');
+                        this.elements.recordBtn.disabled = false;
+                        this.elements.recordingStatus.textContent = 'Voice detected - Recording...';
+                        this.startRecording();
+                    } else if (!isActive && this.isRecording && !this.manualRecording) {
+                        // Auto-stop recording on silence detection (only if not manually recording)
+                        console.log('VAD: Auto-stopping recording on silence detection');
+                        this.elements.recordBtn.classList.remove('voice-detected');
+                        this.elements.recordingStatus.textContent = 'Silence detected - Stopping...';
+                        this.stopRecording();
+                    } else if (!isActive && !this.isRecording) {
+                        // Update UI when waiting for voice
+                        this.elements.recordBtn.classList.remove('voice-detected');
+                        this.elements.recordBtn.disabled = true;
+                        this.elements.recordingStatus.textContent = 'Waiting for voice...';
+                    }
+                } else {
+                    // VAD disabled - just update UI without auto-recording
+                    if (!this.isRecording) {
+                        this.elements.recordBtn.disabled = false;
+                        this.elements.recordBtn.classList.remove('voice-detected');
+                        this.elements.recordingStatus.textContent = 'Hold Space or click to talk';
+                    }
+                }
+            });
         } catch (error) {
             this.showNotification('Failed to initialize audio: ' + error.message, 'error');
             console.error('Audio initialization failed:', error);
@@ -64,6 +97,9 @@ class LexAIApp {
         // Auto-connect
         this.connect();
         
+        // Start VAD monitoring after connection
+        this.startVADMonitoring();
+        
         console.log('LexAI app initialized');
     }
     
@@ -77,7 +113,7 @@ class LexAIApp {
             'voiceManagementBtn', 'settingsPanel', 'settingsToggle',
             'settingsContent', 'autoPlayToggle', 'timestampsToggle',
             'audioQualitySelect', 'loadingOverlay', 'loadingText',
-            'notificationContainer', 'audioPlayer', 'textInput', 'sendTextBtn', 'enableTTSToggle'
+            'notificationContainer', 'audioPlayer', 'textInput', 'sendTextBtn', 'enableTTSToggle', 'enableVADToggle'
         ];
         
         elementIds.forEach(id => {
@@ -91,7 +127,28 @@ class LexAIApp {
         this.elements.clearConversationBtn.addEventListener('click', () => this.clearConversation());
         
         // Recording controls
-        this.elements.recordBtn.addEventListener('click', () => this.toggleRecording());
+        this.elements.recordBtn.addEventListener('click', () => {
+            this.manualRecording = true;  // Mark as manual recording
+            this.toggleRecording();
+        });
+        
+        // Push-to-talk keyboard support
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && !e.repeat && !this.isRecording && 
+                e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                e.preventDefault();
+                this.manualRecording = true;  // Mark as manual recording
+                this.startRecording();
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'Space' && this.isRecording && this.manualRecording &&
+                e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                e.preventDefault();
+                this.stopRecording();
+            }
+        });
         
         // Voice and language selection
         this.elements.voiceSelect.addEventListener('change', (e) => this.setVoice(e.target.value));
@@ -110,6 +167,35 @@ class LexAIApp {
         this.elements.textInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 this.sendTextMessage();
+            }
+        });
+        
+        // VAD toggle
+        this.elements.enableVADToggle.addEventListener('change', (e) => {
+            const enabled = e.target.checked;
+            this.audioHandler.setVADEnabled(enabled);
+            
+            // Stop any ongoing recording when toggling VAD
+            if (this.isRecording && !this.manualRecording) {
+                this.stopRecording();
+            }
+            
+            // Update UI based on VAD state
+            if (!enabled) {
+                // If VAD is disabled, enable the record button
+                this.elements.recordBtn.disabled = false;
+                this.elements.recordBtn.classList.remove('voice-detected');
+                this.elements.recordingStatus.textContent = 'Hold Space or click to talk';
+            } else {
+                // If VAD is enabled and no voice is detected, disable the button
+                if (!this.audioHandler.getVoiceActivityState()) {
+                    this.elements.recordBtn.disabled = true;
+                    this.elements.recordingStatus.textContent = 'Waiting for voice...';
+                } else {
+                    this.elements.recordBtn.disabled = false;
+                    this.elements.recordBtn.classList.add('voice-detected');
+                    this.elements.recordingStatus.textContent = 'Voice detected - Ready to record';
+                }
             }
         });
         
@@ -185,6 +271,9 @@ class LexAIApp {
             this.hideLoading();
             this.showNotification('Connected to LexAI', 'success');
             
+            // Update recording status for push-to-talk
+            this.elements.recordingStatus.textContent = 'Hold Space or click button to talk';
+            
             // Start heartbeat
             this.startHeartbeat();
         };
@@ -251,9 +340,12 @@ class LexAIApp {
             case 'transcription':
                 // User's speech transcript
                 if (message.text && message.text.trim()) {
-                    this.addMessage('user', message.text, {
+                    // If it's a placeholder, show a more informative message
+                    const displayText = message.is_placeholder ? '🎤 Speaking...' : message.text;
+                    this.addMessage('user', displayText, {
                         confidence: message.confidence,
-                        language: message.language
+                        language: message.language,
+                        is_placeholder: message.is_placeholder
                     });
                 }
                 break;
@@ -266,6 +358,23 @@ class LexAIApp {
                         processingTime: message.processing_time_ms
                     });
                 }
+                break;
+                
+            case 'ai_interrupted':
+                // AI speech was interrupted
+                console.log('AI speech interrupted by user');
+                this.stopAudioPlayback();
+                break;
+                
+            case 'tts_interrupted':
+                // TTS was interrupted by new recording
+                console.log('TTS interrupted by new recording');
+                this.stopAudioPlayback();
+                break;
+                
+            case 'processing_complete':
+                // Processing done but no response
+                this.elements.recordingStatus.textContent = 'Hold Space or click button to talk';
                 break;
                 
             case 'response':
@@ -303,6 +412,25 @@ class LexAIApp {
                 
             default:
                 console.log('Unknown message type:', message.type);
+        }
+    }
+    
+    stopAudioPlayback() {
+        // Stop any playing audio immediately
+        if (this.audioPlayer) {
+            this.audioPlayer.pause();
+            this.audioPlayer.currentTime = 0;
+        }
+        
+        // Clear audio chunks and queue
+        this.audioChunks = [];
+        this.currentAudioMetadata = null;
+        this.audioQueue = [];
+        
+        // Cancel any pending audio processing
+        if (this.audioStreamSource) {
+            this.audioStreamSource.disconnect();
+            this.audioStreamSource = null;
         }
     }
     
@@ -505,6 +633,14 @@ class LexAIApp {
     
     async startRecording() {
         try {
+            // Send audio_start message first
+            if (this.isConnected && this.websocket.readyState === WebSocket.OPEN) {
+                this.websocket.send(JSON.stringify({ type: 'audio_start' }));
+            }
+            
+            // Stop any playing audio
+            this.stopAudioPlayback();
+            
             await this.audioHandler.startRecording((audioData) => {
                 // Send audio chunks to server
                 if (this.isConnected && this.websocket.readyState === WebSocket.OPEN) {
@@ -514,7 +650,7 @@ class LexAIApp {
             
             this.isRecording = true;
             this.updateRecordingUI(true);
-            this.elements.recordingStatus.textContent = 'Recording... Speak now';
+            this.elements.recordingStatus.textContent = 'Recording... Release to send';
             
         } catch (error) {
             console.error('Failed to start recording:', error);
@@ -526,8 +662,25 @@ class LexAIApp {
         try {
             await this.audioHandler.stopRecording();
             this.isRecording = false;
+            this.manualRecording = false;  // Reset manual recording flag
             this.updateRecordingUI(false);
             this.elements.recordingStatus.textContent = 'Processing...';
+            
+            // Reset status after a short delay
+            setTimeout(() => {
+                if (!this.isRecording) {
+                    // Update status based on VAD state
+                    if (this.elements.enableVADToggle.checked) {
+                        if (this.audioHandler.getVoiceActivityState()) {
+                            this.elements.recordingStatus.textContent = 'Voice detected - Ready to record';
+                        } else {
+                            this.elements.recordingStatus.textContent = 'Waiting for voice...';
+                        }
+                    } else {
+                        this.elements.recordingStatus.textContent = 'Hold Space or click button to talk';
+                    }
+                }
+            }, 2000);
             
             // Send end-of-audio signal
             if (this.isConnected && this.websocket.readyState === WebSocket.OPEN) {
@@ -885,6 +1038,23 @@ class LexAIApp {
         
         if (this.isRecording) {
             this.stopRecording();
+        }
+    }
+    
+    async startVADMonitoring() {
+        try {
+            // Request microphone permission and start VAD monitoring
+            await this.audioHandler.startVADMonitoring();
+            console.log('VAD monitoring started');
+            
+            // Initially disable button until voice is detected
+            this.elements.recordBtn.disabled = true;
+            this.elements.recordingStatus.textContent = 'Waiting for voice...';
+        } catch (error) {
+            console.error('Failed to start VAD monitoring:', error);
+            // If VAD fails, enable button anyway
+            this.elements.recordBtn.disabled = false;
+            this.elements.recordingStatus.textContent = 'Hold Space or click button to talk';
         }
     }
 }

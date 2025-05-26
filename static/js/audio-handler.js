@@ -29,6 +29,20 @@ class AudioHandler {
         // Audio level monitoring
         this.audioLevels = new Float32Array(128);
         this.levelCallback = null;
+        
+        // Voice Activity Detection
+        this.vadEnabled = true;
+        this.voiceActivityCallback = null;
+        this.isVoiceActive = false;
+        this.vadThreshold = 0.01;  // Energy threshold for voice detection
+        this.vadSmoothingFrames = 3;  // Number of frames to smooth over
+        this.vadHistory = [];  // History of voice activity
+        this.silenceFrames = 0;
+        this.speechFrames = 0;
+        this.minSpeechFrames = 3;  // Minimum frames to consider as speech
+        this.minSilenceFrames = 10;  // Minimum frames to consider as silence
+        this.energySmoothing = 0.95;  // Exponential smoothing factor
+        this.smoothedEnergy = 0;
     }
     
     async init() {
@@ -329,6 +343,11 @@ class AudioHandler {
                 // Get raw float32 samples
                 const inputData = event.inputBuffer.getChannelData(0);
                 
+                // Perform VAD if enabled
+                if (this.vadEnabled) {
+                    this.processVAD(inputData);
+                }
+                
                 // Downsample to 16kHz
                 const downsampledLength = Math.floor(inputData.length / downsampleRatio);
                 const downsampled = new Float32Array(downsampledLength);
@@ -510,6 +529,132 @@ class AudioHandler {
             
         } catch (error) {
             console.error('Failed to switch audio device:', error);
+            throw error;
+        }
+    }
+    
+    // Process Voice Activity Detection
+    processVAD(inputData) {
+        // Continue processing VAD even during recording to detect when to stop
+        
+        // Calculate energy of the audio frame
+        let energy = 0;
+        for (let i = 0; i < inputData.length; i++) {
+            energy += inputData[i] * inputData[i];
+        }
+        energy = energy / inputData.length;
+        
+        // Apply exponential smoothing
+        this.smoothedEnergy = this.energySmoothing * this.smoothedEnergy + 
+                             (1 - this.energySmoothing) * energy;
+        
+        // Determine if this frame contains voice
+        const frameHasVoice = this.smoothedEnergy > this.vadThreshold;
+        
+        // Update history
+        this.vadHistory.push(frameHasVoice);
+        if (this.vadHistory.length > this.vadSmoothingFrames) {
+            this.vadHistory.shift();
+        }
+        
+        // Count recent voice/silence frames
+        const recentVoiceFrames = this.vadHistory.filter(v => v).length;
+        const voiceDetected = recentVoiceFrames >= Math.floor(this.vadSmoothingFrames * 0.6);
+        
+        // Update speech/silence frame counters
+        if (voiceDetected) {
+            this.speechFrames++;
+            this.silenceFrames = 0;
+        } else {
+            this.silenceFrames++;
+            this.speechFrames = 0;
+        }
+        
+        // Determine overall voice activity state with hysteresis
+        const wasActive = this.isVoiceActive;
+        
+        if (!wasActive && this.speechFrames >= this.minSpeechFrames) {
+            // Transition to active
+            this.isVoiceActive = true;
+            console.log('Voice activity started');
+            if (this.voiceActivityCallback) {
+                this.voiceActivityCallback(true);
+            }
+        } else if (wasActive && this.silenceFrames >= this.minSilenceFrames) {
+            // Transition to inactive
+            this.isVoiceActive = false;
+            console.log('Voice activity ended');
+            if (this.voiceActivityCallback) {
+                this.voiceActivityCallback(false);
+            }
+        }
+    }
+    
+    // Set VAD callback
+    setVoiceActivityCallback(callback) {
+        this.voiceActivityCallback = callback;
+    }
+    
+    // Enable/disable VAD
+    setVADEnabled(enabled) {
+        this.vadEnabled = enabled;
+        console.log(`VAD ${enabled ? 'enabled' : 'disabled'}`);
+    }
+    
+    // Get current voice activity state
+    getVoiceActivityState() {
+        return this.isVoiceActive;
+    }
+    
+    // Start VAD monitoring without recording
+    async startVADMonitoring() {
+        if (this.isRecording) {
+            console.warn('Cannot start VAD monitoring while recording');
+            return;
+        }
+        
+        try {
+            // Request microphone access
+            await this.requestMicrophonePermission();
+            
+            // Setup audio context
+            await this.setupAudioContext();
+            
+            // Setup script processor for VAD only
+            await this.setupVADProcessing();
+            
+            console.log('VAD monitoring started');
+            
+        } catch (error) {
+            console.error('Failed to start VAD monitoring:', error);
+            throw error;
+        }
+    }
+    
+    async setupVADProcessing() {
+        try {
+            // Create a script processor node for VAD
+            const bufferSize = 2048;  // Smaller buffer for faster VAD response
+            this.vadProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+            
+            // Connect microphone -> script processor (no destination to avoid echo)
+            this.microphone.connect(this.vadProcessor);
+            
+            // Process audio for VAD only
+            this.vadProcessor.onaudioprocess = (event) => {
+                // Get raw float32 samples
+                const inputData = event.inputBuffer.getChannelData(0);
+                
+                // Perform VAD
+                if (this.vadEnabled) {
+                    this.processVAD(inputData);
+                }
+            };
+            
+            console.log('VAD processing setup complete');
+            
+        } catch (error) {
+            console.error('VAD processing setup failed:', error);
             throw error;
         }
     }

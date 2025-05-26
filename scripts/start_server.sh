@@ -75,7 +75,7 @@ verify_environment() {
     done
     
     # Check models
-    if [ ! -d "/mnt/storage/models/ultravox/config.json" ]; then
+    if [ ! -f "/mnt/storage/models/ultravox/config.json" ]; then
         warning "Ultravox model not found. Models will be downloaded on first run."
     fi
     
